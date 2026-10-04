@@ -99,7 +99,7 @@ function libGen(R) {
       if (fits(x0, y0, w, h)) { place(x0, y0, w, h, 2); break; }
     }
   }
-  const dd = doorsGen(g, rooms, W, H, R);          // doors on the reading rooms and exit halls (see doors.html)
+  const dd = doorsGen(g, tt, kd, rooms, W, H, R, cy);   // extra closed-off rooms, each with its own door (see doors.html)
   return {
     g, tt, kd, rooms, R, sites, exit: sites[0], lib: true, cy, doors: dd.list, dm: dd.dm,
     spawn: { x0: 2 * T, x1: 5.6 * T, z0: (cy + .6) * T, z1: (cy + 3.4) * T },
@@ -334,7 +334,7 @@ function libBuild(world, Q) {
       }
     }
   }
-  for (const d of world.doors) L.panel.add(TC(d.tx), WH - .5, TC(d.ty), 0, 1, 1 / WH, 1, jit(.8, 1, .04));      // stone-and-wood lintel over every door
+  for (const d of world.doors) L.panel.add(TC(d.tx), WH - .5, TC(d.ty), 0, 1, 1 / WH, 1, jit(.8, 1, .04));      // lintel over every door-room door
   const mk2 = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
   mk2('shelfA', G.wall, A.lib.shelfA); mk2('shelfB', G.wall, A.lib.shelfB); mk2('shelfC', G.wall, A.lib.shelfC); mk2('panel', G.wall, A.lib.panel);
   mk2('rug', G.floor, A.lib.rug); mk2('pillar', LG.pillar, A.lib.stone); mk2('table', LG.table, A.wood); mk2('candle', LG.candle, A.lib.candle); mk2('flame', G.bloom, A.flower);
