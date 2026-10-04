@@ -268,7 +268,7 @@ function libBuild(world, Q) {
   const cnt = (x) => Math.floor(x * Q.dens + R());
   const jit = (l, h, s) => { const v = l + R() * (h - l); return new THREE.Color(v, v * (1 + (R() - .5) * s), v * (1 - (R() - .5) * s)); };
   const FLAME = new THREE.Color(0xffa84a), BC = [0x6a2a24, 0x3a4a2c, 0x2a3552, 0x7a5a2a, 0x4a2a4a, 0x8a7a5a, 0x5a3a24].map(c => new THREE.Color(c));
-  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const WHITE = new THREE.Color(0xffffff), DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   const isOpen = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 0;
   const isShelf = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 1 && kd[I(x, y)] === 0;
   const candle = (x, y, z, lit) => {
@@ -300,7 +300,7 @@ function libBuild(world, Q) {
       if (!isShelf(tx + dx, ty + dy)) continue;
       const th = Math.atan2(-dx, -dy), tX = Math.cos(th), tZ = -Math.sin(th), bx = cx + dx * (T / 2 - .03), bz = cz + dy * (T / 2 - .03);
       if (R() < .075) { const u = (R() - .5) * (T - .7), s = 1.1 + R(); L.web.add(bx + tX * u - dx * .05, WH - s / 2 - .04, bz + tZ * u - dy * .05, th + (R() < .5 ? Math.PI : 0), s, s, s); }
-      if (tp !== 1 && R() < .025) { const u = (R() - .5) * (T - 1); L.ladder.add(bx + tX * u - dx * .5, 0, bz + tZ * u - dy * .5, th, 1, 1, 1, null, -.14); }
+      if (tp !== 1 && R() < .025) { const u = (R() - .5) * (T - 1); L.ladder.add(bx + tX * u - dx * .5, 0, bz + tZ * u - dy * .5, th, 1, 1, 1, WHITE, -.14); }   // needs a colour: shares the wood material with the (coloured) tables
       if (R() < .012) glowS.push([bx - dx * .12, 1 + R() * 2.6, bz - dy * .12, 1, .8, .4]);      // a book that glows faintly
       const lr = tp === 1 ? 0 : inRoom ? .07 : .04;
       if (R() < lr) {
