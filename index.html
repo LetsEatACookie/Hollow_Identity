@@ -2743,11 +2743,32 @@
       // Small detail is dropped sooner than walls: by then it is mostly fog anyway. Levels can cap the distance too (world.maxDist).
       const LOD_CAPS = { tuft: 24, fern: 24, bush: 22, stem: 20, bloom: 20, mcap: 18, mstem: 18, ivy: 32, vine: 30, leafy: 28, lantB: 34, lantC: 34, web: 22, ladder: 28, candle: 24, flame: 24, book: 20, chand: 34 };
       let visChunks = 0;
+      // ---- if one object has a broken geometry, three.js throws and the WHOLE frame stays black (it only happens while that object is in view,
+      // which is why it seemed to depend on the direction you look). We find the culprit(s), switch them off and keep rendering.
+      const BAD = new WeakSet(); let badN = 0, healAt = 0;
+      function describeBad(o) {
+        const ch = CHUNKS.find(c => c.m === o), g = o.geometry, nul = g && g.attributes ? Object.keys(g.attributes).filter(k => !g.attributes[k]) : ['(no attributes)'];
+        return (ch ? 'chunk:' + ch.cat : o.type) + ' geo:' + (g ? g.type : 'none') + (nul.length ? ' nullAttr:' + nul.join(',') : '') + (o.isInstancedMesh && !o.instanceMatrix ? ' noInstanceMatrix' : '');
+      }
+      function healRender(err) {
+        const cands = []; scene.traverse(o => { if ((o.isMesh || o.isPoints || o.isLine) && o.geometry && o.visible && !BAD.has(o)) cands.push(o); });
+        const was = cands.map(o => o.visible); cands.forEach(o => { o.visible = false; });
+        const bad = [];
+        for (const o of cands) { o.visible = true; try { renderer.render(scene, camera); } catch (e) { bad.push(o); } o.visible = false; }
+        cands.forEach((o, i) => { o.visible = was[i]; });
+        for (const o of bad) { BAD.add(o); o.visible = false; badN++; console.warn('[hollow] switched off a broken object:', describeBad(o), o); }
+        if (!bad.length) { console.error('[hollow] render failed and no single object is to blame:', err); healAt = tNow + 5; }
+        return bad.length;
+      }
+      function safeRender() {
+        try { renderer.render(scene, camera); }
+        catch (err) { if (tNow < healAt) return; healAt = tNow + .4; if (healRender(err)) { try { renderer.render(scene, camera); } catch (e2) { } } }
+      }
       function cullChunks() {
         camera.updateMatrixWorld(); camera.matrixWorldInverse.copy(camera.matrixWorld).invert();     // this frame's view, not last frame's (stops edge flicker when turning)
         pvm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse); frustum.setFromProjectionMatrix(pvm);
         const cp = camera.position, D = Math.min(CFG.dist, world.maxDist || 1e9), nf = P.night ? 1.35 : 1;
-        for (const c of CHUNKS) { const cap = LOD_CAPS[c.cat] ? Math.min(D, LOD_CAPS[c.cat] * nf) : D; c.m.visible = cp.distanceTo(c.sph.center) - c.sph.radius < cap && frustum.intersectsSphere(c.sph); }
+        for (const c of CHUNKS) { const cap = LOD_CAPS[c.cat] ? Math.min(D, LOD_CAPS[c.cat] * nf) : D; c.m.visible = !BAD.has(c.m) && cp.distanceTo(c.sph.center) - c.sph.radius < cap && frustum.intersectsSphere(c.sph); }
         visChunks = 0; for (const c of CHUNKS) if (c.m.visible) visChunks++;
       }
       // ---- automatic resolution: drops quickly when the frame rate sags, creeps back up slowly (and not for 20 s after a drop, so it doesn't bounce)
@@ -2755,7 +2776,7 @@
       function perfTick(r) {
         fpsAcc += r; fpsN++; if (fpsAcc < .7) return;
         const fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
-        if (CFG.fps) { const el = $('#fps'); el.classList.remove('hide'); el.textContent = Math.round(fps) + ' FPS · ' + Math.round(curPR() * 100) + '% · L' + (LV + 1) + ' · chunks ' + visChunks + '/' + CHUNKS.length + ' · torch ' + Torch.k.toFixed(2) + (Torch.dead ? ' DEAD' : Torch.fault ? ' FAULT' : '') + ' · ' + CARD[Math.round((((-P.yaw * 180 / Math.PI) % 360 + 360) % 360) / 45) % 8]; }
+        if (CFG.fps) { const el = $('#fps'); el.classList.remove('hide'); el.textContent = Math.round(fps) + ' FPS · ' + Math.round(curPR() * 100) + '% · L' + (LV + 1) + ' · chunks ' + visChunks + '/' + CHUNKS.length + (badN ? ' · BROKEN ' + badN : '') + ' · torch ' + Torch.k.toFixed(2) + (Torch.dead ? ' DEAD' : Torch.fault ? ' FAULT' : '') + ' · ' + CARD[Math.round((((-P.yaw * 180 / Math.PI) % 360 + 360) % 360) / 45) % 8]; }
         if (!started || paused || !CFG.auto || lvBusy) return;
         if (tNow < startT + 4) return;                         // ignore the first seconds of a level: shader compiles and texture uploads
         if (fps < 52) { upN = 0; if (autoK > AK_MIN && tNow > adaptT) { autoK = Math.max(AK_MIN, autoK - (fps < 35 ? .15 : fps < 45 ? .1 : .05)); adaptT = tNow + 1.3; noRaise = tNow + 20; applyRes(); } }
@@ -2781,7 +2802,7 @@
         if (!world || !previewAv && !started) return;
         if (started) update(dt, t); else previewCam(t);
         updatePool(dt, t); updateFlares(dt); updateRemotes(dt, t); updateMimic(dt, t); vcFrame(); updatePings(dt); if (petals) updatePetals(dt);
-        cullChunks(); renderer.render(scene, camera);
+        cullChunks(); safeRender();
       }
       resize(); requestAnimationFrame(loop);
   </script>

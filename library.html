@@ -357,7 +357,7 @@ function libTeardown() {
   const w = world; if (!w) return;
   if (w.root) {
     scene.remove(w.root);
-    const sg = new Set(Object.values(G)), sm = new Set(); for (const k in A) if (A[k] && A[k].isMaterial) sm.add(A[k]); if (A.lib) for (const k in A.lib) if (A.lib[k] && A.lib[k].isMaterial) sm.add(A.lib[k]);
+    const sg = new Set([...Object.values(G), ...Object.values(LG)]), sm = new Set(); for (const k in A) if (A[k] && A[k].isMaterial) sm.add(A[k]); if (A.lib) for (const k in A.lib) if (A.lib[k] && A.lib[k].isMaterial) sm.add(A.lib[k]);
     w.root.traverse(o => {
       if (o.isInstancedMesh && o.dispose) o.dispose();
       if (o.geometry && !sg.has(o.geometry)) o.geometry.dispose();
@@ -383,20 +383,25 @@ async function libEnter() {
   P.freeze = true; keys.clear(); joy.x = joy.y = 0; touchSprint = false; Torch.shaking = false;
   Aud.shift(); libFade(true, 'LEVEL ' + (n + 1), lib ? 'The Library' : 'The Garden');
   await wait(1100);
-  libTeardown(); LV = n;
-  Torch.fault = false; Torch.dead = false; Torch.ft = 0; Torch.prog = 0; Torch.k = 1; Torch.next = TORCH.first;   // fresh flashlight on every new level
-  if (lib) world = libBuild(libGen(mulberry32(hashStr(code + '|library' + (n > 1 ? '|' + n : '')))), Q);
-  else { GW = 41; GH = 31; world = buildWorld(genWorld(mulberry32(hashStr(code + '|garden|' + n))), Q); }
-  const w = world;
-  explored = new Uint8Array(GW * GH);
-  const mm = $('#mm'); mm.width = GW * (w.mmS || 5); mm.height = GH * (w.mmS || 5);
-  libEnv(w);
-  const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = lib ? -Math.PI / 2 : Math.PI / 4; P.pitch = 0; P.flickT = .5;
-  if (Mim.st !== 'idle') mimicEnd(); Mim.t = Math.max(Mim.t, 75);
-  if (Scare.act) endScare(); Scare.quiet = 35;
-  applyRes(); startT = tNow; await frame();
-  net.set({ lv: LV, x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, e: 0 });
-  await wait(500); libFade(false); toast('Level ' + (n + 1) + ' \u2014 ' + (lib ? 'the Library' : 'the Garden') + '. Find the way out.');
+  try {
+    libTeardown(); LV = n;
+    Torch.fault = false; Torch.dead = false; Torch.ft = 0; Torch.prog = 0; Torch.k = 1; Torch.next = TORCH.first;   // fresh flashlight on every new level
+    if (lib) world = libBuild(libGen(mulberry32(hashStr(code + '|library' + (n > 1 ? '|' + n : '')))), Q);
+    else { GW = 41; GH = 31; world = buildWorld(genWorld(mulberry32(hashStr(code + '|garden|' + n))), Q); }
+    const w = world;
+    explored = new Uint8Array(GW * GH);
+    const mm = $('#mm'); mm.width = GW * (w.mmS || 5); mm.height = GH * (w.mmS || 5);
+    libEnv(w);
+    const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = lib ? -Math.PI / 2 : Math.PI / 4; P.pitch = 0; P.flickT = .5;
+    if (Mim.st !== 'idle') mimicEnd(); Mim.t = Math.max(Mim.t, 75);
+    if (Scare.act) endScare(); Scare.quiet = 35;
+    applyRes(); startT = tNow; await frame();
+    net.set({ lv: LV, x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, e: 0 });
+    await wait(500); libFade(false); toast('Level ' + (n + 1) + ' \u2014 ' + (lib ? 'the Library' : 'the Garden') + '. Find the way out.');
+  } catch (err) {
+    console.error('[hollow] level failed to build', err);
+    libFade(true, 'LEVEL FAILED TO LOAD', String(err && err.message || err)); lvBusy = false; return;
+  }
   P.freeze = false; lvBusy = false;
 }
   </script>
