@@ -863,6 +863,63 @@
       background: linear-gradient(90deg, #4dc3ff, #9dffe8)
     }
 
+    .bar2.hp {
+      height: 9px;
+      margin-top: 5px;
+      box-shadow: 0 0 0 1px rgba(255, 120, 120, .18)
+    }
+
+    .bar2.hp div {
+      background: linear-gradient(90deg, #ff4d5e, #ff9a86);
+      transition: width .25s
+    }
+
+    .bar2.hp div.low {
+      background: #ff2d3f;
+      animation: hpPulse .7s ease-in-out infinite alternate
+    }
+
+    @keyframes hpPulse {
+      from {
+        opacity: 1
+      }
+
+      to {
+        opacity: .45
+      }
+    }
+
+    #hurt {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 13;
+      opacity: 0;
+      background: radial-gradient(ellipse at center, transparent 35%, rgba(150, 0, 10, .55) 75%, rgba(90, 0, 5, .9) 100%)
+    }
+
+    #down {
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: 38%;
+      z-index: 15;
+      text-align: center;
+      pointer-events: none;
+      font: 600 clamp(22px, 4vw, 34px)/1.2 Cinzel, Georgia, serif;
+      letter-spacing: .1em;
+      color: #ffb4a8;
+      text-shadow: 0 0 24px rgba(255, 60, 60, .5)
+    }
+
+    #down small {
+      display: block;
+      margin-top: 10px;
+      font: 500 14px Inter, system-ui, sans-serif;
+      letter-spacing: .04em;
+      color: var(--mute)
+    }
+
     .lbl {
       font-size: 11px;
       letter-spacing: .14em;
@@ -908,6 +965,53 @@
 
     #hint.out {
       opacity: 0
+    }
+
+    #shakeUI {
+      position: absolute;
+      bottom: calc(74px + var(--sab));
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 10px 18px 12px;
+      border-radius: 14px;
+      background: var(--glass);
+      border: 1px solid rgba(255, 194, 122, .45);
+      color: var(--amber);
+      font-size: 13.5px;
+      text-align: center;
+      white-space: nowrap;
+      animation: shakeNag .5s ease-in-out infinite alternate
+    }
+
+    #shakeUI .bar {
+      margin-top: 8px;
+      height: 5px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, .12);
+      overflow: hidden
+    }
+
+    #shakeUI .bar i {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: var(--amber)
+    }
+
+    @keyframes shakeNag {
+      from {
+        transform: translateX(-50%) rotate(-.6deg)
+      }
+
+      to {
+        transform: translateX(-50%) rotate(.6deg)
+      }
+    }
+
+    #bShake {
+      right: calc(84px + var(--sar));
+      bottom: calc(210px + var(--sab));
+      border-color: rgba(255, 194, 122, .6)
     }
 
     #toasts {
@@ -1224,6 +1328,8 @@
 <body>
   <div id="stage"></div>
   <div id="vig"></div>
+  <div id="hurt"></div>
+  <div id="down" class="hide">You collapsed…<small>The others will have to manage without you for a moment.</small></div>
   <div id="grain"></div>
   <div id="nv"></div>
 
@@ -1315,6 +1421,10 @@
       </svg></div>
     <div class="xh"></div>
     <div id="bl">
+      <div class="lbl" style="margin-top:0"><span>Health</span><span id="hpN">100</span></div>
+      <div class="bar2 hp">
+        <div id="hpFill"></div>
+      </div>
       <div class="lbl"><span>Stamina</span></div>
       <div class="bar2">
         <div id="stamFill"></div>
@@ -1329,7 +1439,10 @@
     </div>
     <div id="mmWrap" class="hide"><canvas id="mm" width="205" height="155"></canvas></div>
     <div id="toasts"></div>
-    <div id="hint">WASD move · Shift sprint · Space jump · F flashlight · Q / E / G perk keys · V mute mic · Esc menu</div>
+    <div id="shakeUI" class="hide"><span id="shakeTxt"></span>
+      <div class="bar"><i id="shakeBar"></i></div>
+    </div>
+    <div id="hint">WASD move · Shift sprint · Space jump · F flashlight · Right mouse shake torch · Q / E / G perk keys · V mute mic · Esc menu</div>
   </div>
   <div id="pings"></div>
   <div id="pause" class="hide">
@@ -1374,7 +1487,7 @@
       <div id="knob"></div>
     </div><button type="button" class="tb" id="bMenu">☰</button>
     <button type="button" class="tb" id="bJump">⤒</button><button type="button" class="tb" id="bRun">⚡</button><button
-      type="button" class="tb" id="bFlash">🔦</button>
+      type="button" class="tb" id="bFlash">🔦</button><button type="button" class="tb hide" id="bShake">🫨</button>
     <button type="button" class="tb hide" id="bQ">Q</button><button type="button" class="tb hide"
       id="bE">E</button><button type="button" class="tb hide" id="bG">G</button>
   </div>
@@ -1717,7 +1830,7 @@
       };
       // ---------- jumpscares: something might be waiting just around a corner ----------
       // Only you see/hear them (they aren't synced to teammates). Corners come from world.scares (maps.html).
-      const SCARE = { firstDelay: 60, minGap: 45, maxGap: 95, volume: .8 };   // seconds before the first one · gap between scares · stinger loudness
+      const SCARE = { firstDelay: 60, minGap: 45, maxGap: 95, volume: .8, dmg: 10 };   // seconds before the first one · gap between scares · stinger loudness
       const Scare = { quiet: SCARE.firstDelay, act: null, fig: null, fx: null, shake: 0, tile: -1, from: null, far: null, wld: null, map: null };
       function scareFigure() {
         if (Scare.fig) return Scare.fig;
@@ -1768,7 +1881,7 @@
               const cs = a.s, toC = Math.hypot(cs.x - f.position.x, cs.z - f.position.z), tx = toC > .6 ? cs.x : P.x, tz = toC > .6 ? cs.z : P.z;
               const d = Math.hypot(tx - f.position.x, tz - f.position.z) || 1, st = Math.min(d, 10.5 * dt);
               f.position.x += (tx - f.position.x) / d * st; f.position.z += (tz - f.position.z) / d * st; f.rotation.x = .25;
-              if (dist < 1.2) { Aud.stinger(.6); scareFlash(true); Scare.shake = 1; f.rotation.x = 0; endScare(); return; }
+              if (dist < 1.2) { Aud.stinger(.6); scareFlash(true); Scare.shake = 1; f.rotation.x = 0; damagePlayer(SCARE.dmg); endScare(); return; }
             }
           } else if (a.kind === 'peek') {
             if (!a.go && a.t > .25) { a.go = true; Aud.stinger(.55); Scare.shake = .35; }
@@ -1791,8 +1904,78 @@
       const Q_HIGH = { tex: 512, aniso: 4, bump: 0, dens: .75, pool: 4, pr: Math.min(window.devicePixelRatio || 1, 1.25), glow: 1 };
       const Q_LOW = { tex: 256, aniso: 2, bump: 0, dens: .4, pool: 2, pr: .7, glow: 1 };
       let Q = Q_HIGH, world = null, code = '', me = null, started = false, netOn = false, tNow = 0, lockFailed = false;
-      const P = { x: 0, z: 0, y: 0, vy: 0, yaw: 0, pitch: 0, stam: 100, exh: false, flash: true, night: false, energy: 100, flares: 0, speed: 0, stepAcc: 0, bob: 0, escaped: false, trailAcc: 0, grounded: true, flareId: 0, pingId: 0, pingCd: 0, flareCd: 0, flickT: 0 };
+      const P = { x: 0, z: 0, y: 0, vy: 0, yaw: 0, pitch: 0, stam: 100, exh: false, flash: true, night: false, energy: 100, flares: 0, speed: 0, stepAcc: 0, bob: 0, escaped: false, trailAcc: 0, grounded: true, flareId: 0, pingId: 0, pingCd: 0, flareCd: 0, flickT: 0, hp: 100, hpT: 0, hurt: 0, down: 0, dnK: 0, hbT: 0 };
       const remotes = new Map(), flares = [], pings = [], DYN = new Set();
+      // ---------- health: the Mimic's bite and the lunging scares hurt. Health slowly returns if you stay out of trouble; at zero you collapse and wake up back in the start room ----------
+      const HEALTH = { max: 100, regenDelay: 10, regen: 1.5, lowAt: 30, respawnS: 5, respawnHp: 60 };   // regen starts this many seconds after the last hit (hp/s) · 'low health' warning level · seconds knocked out · health on waking
+      function damagePlayer(n) {
+        if (P.escaped || P.down > 0 || !started) return;
+        P.hp = Math.max(0, P.hp - n); P.hpT = 0; P.hurt = 1; Scare.shake = Math.max(Scare.shake, .6); Aud.burst(180, .3, .22, .8); Aud.tone(90, 45, .25, .2);
+        if (P.hp <= 0) knockOut();
+      }
+      function knockOut() {
+        P.down = HEALTH.respawnS; keys.clear(); joy.x = joy.y = 0; touchSprint = false; Torch.shaking = false;
+        $('#down').classList.remove('hide'); toast('You collapsed…');
+      }
+      function startSpot() {
+        let sx, sz, n = 0; do { sx = 8 + Math.random() * 7; sz = 46.5 + Math.random() * 5; n++; } while (n < 25 && [...remotes.values()].some(r => Math.hypot(r.x - sx, r.z - sz) < 1.3));
+        return { x: sx, z: sz };
+      }
+      function wakeUp() {
+        const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = Math.PI / 4; P.pitch = 0; P.hp = HEALTH.respawnHp; P.hpT = 0; P.down = 0;
+        P.stam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1); P.exh = false; P.flickT = .6;
+        if (Mim.st !== 'idle') mimicEnd();
+        $('#down').classList.add('hide'); toast('You wake up back where you started');
+        net.set({ x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0 });
+      }
+      function updateHealth(dt, t) {
+        if (P.escaped && P.down > 0) { P.down = 0; $('#down').classList.add('hide'); }
+        if (P.down > 0) { P.down -= dt; if (P.down <= 0) wakeUp(); }
+        else { P.hpT += dt; if (P.hp < HEALTH.max && P.hpT > HEALTH.regenDelay && !P.escaped) P.hp = Math.min(HEALTH.max, P.hp + HEALTH.regen * dt); }
+        P.dnK = lerp(P.dnK, P.down > 0 ? 1 : 0, 1 - Math.exp(-4 * dt)); P.hurt = Math.max(0, P.hurt - dt * 1.6);
+        const lowHp = HEALTH.max * HEALTH.lowAt / 100, low = P.hp > 0 && P.hp < lowHp && P.down <= 0;
+        if (low) { P.hbT -= dt; if (P.hbT <= 0) { P.hbT = .55 + P.hp / lowHp * .55; Aud.tone(62, 40, .13, .22); setTimeout(() => Aud.tone(55, 36, .13, .15), 150); } }
+        const pulse = low ? (.2 + .15 * Math.sin(t * 7)) * (1 - P.hp / lowHp * .6) : 0;
+        $('#hurt').style.opacity = Math.min(1, Math.max(P.hurt * .85, pulse, P.down > 0 ? .55 : 0)).toFixed(3);
+      }
+      // ---------- flashlight fault: every few minutes the torch starts to flicker and gets worse until you shake it (hold right mouse) ----------
+      const TORCH = { first: 90, minGap: 120, maxGap: 240, need: 1.3, needDead: 2.4, ramp: 30, die: 50 };   // seconds: first fault · gap between faults · hold time to fix · hold time to revive a dead torch · time to reach the worst flicker · time until it dies if ignored
+      const Torch = { next: TORCH.first, fault: false, dead: false, warned: false, ft: 0, prog: 0, shaking: false, k: 1, chop: 0, rattle: 0, sx: 0, sy: 0 };
+      const lightOn = () => P.flash && Torch.k > .3;      // is my beam actually lit right now?
+      function torchShake(on) { Torch.shaking = !!on && started && !paused; }
+      function updateTorch(dt) {
+        const T0 = Torch;
+        if (paused) T0.shaking = false;
+        if (!T0.fault && !paused && !P.escaped) { T0.next -= dt; if (T0.next <= 0) { T0.fault = true; T0.dead = false; T0.warned = false; T0.ft = 0; T0.prog = 0; T0.chop = 0; $('#shakeTxt').innerHTML = isTouch ? 'Your flashlight is flickering — hold <b>🫨</b> to shake it' : 'Your flashlight is flickering — hold <b>right mouse</b> to shake it'; toast('Your flashlight is flickering…'); } }
+        let sev = 0;
+        if (T0.fault) {
+          T0.ft += dt;
+          if (T0.shaking) T0.prog += dt; else T0.prog = Math.max(0, T0.prog - dt * .5);
+          if (!T0.dead && !T0.warned && T0.ft > TORCH.die - 12) { T0.warned = true; toast('The flashlight is dying…'); }
+          if (!T0.dead && T0.ft > TORCH.die) {          // ignored for too long: it goes out completely
+            T0.dead = true; T0.prog = 0; T0.k = 0; Aud.tone(420, 50, .5, .14, 'sawtooth'); Aud.burst(300, .3, .1, .8); toast('Your flashlight died');
+            $('#shakeTxt').innerHTML = isTouch ? 'Your flashlight died — hold <b>🫨</b> to shake it back to life' : 'Your flashlight died — hold <b>right mouse</b> to shake it back to life';
+          }
+          const need = T0.dead ? TORCH.needDead : TORCH.need;
+          if (T0.prog >= need) {
+            const wasDead = T0.dead; if (wasDead) P.flickT = .7;   // it coughs back to life
+            T0.fault = false; T0.dead = false; T0.prog = 0; T0.k = 1; T0.next = TORCH.minGap + Math.random() * (TORCH.maxGap - TORCH.minGap);
+            Aud.tone(1500, 900, .08, .12, 'square'); setTimeout(() => Aud.tone(900, 1300, .1, .08), 90); toast(wasDead ? 'The flashlight comes back to life' : 'The flashlight steadies');
+          } else sev = T0.dead ? 0 : Math.min(1, .25 + T0.ft / TORCH.ramp * .75) * (1 - T0.prog / need * .85);
+        }
+        if (T0.dead) T0.k = 0;
+        else if (sev > 0) {                                 // random bursts of dark and glare, longer and more frequent as it gets worse
+          T0.chop -= dt;
+          if (T0.chop <= 0) { const dark = Math.random() < sev * .6; T0.k = dark ? .02 : .45 + Math.random() * .55; T0.chop = dark ? .04 + Math.random() * .2 * (.5 + sev) : .08 + Math.random() * 1.1 * (1.2 - sev); }
+        } else T0.k = lerp(T0.k, 1, 1 - Math.exp(-14 * dt));
+        // the shake itself: the torch rattles in your hand
+        if (T0.shaking) {
+          T0.rattle -= dt; if (T0.rattle <= 0) { T0.rattle = .11; Aud.burst(1700 + Math.random() * 600, .05, .07, 2.5); }
+          T0.sx = (Math.random() - .5) * .07; T0.sy = (Math.random() - .5) * .07;
+        } else { T0.sx *= .6; T0.sy *= .6; }
+        $('#shakeUI').classList.toggle('hide', !T0.fault); if (T0.fault) $('#shakeBar').style.width = (T0.prog / (T0.dead ? TORCH.needDead : TORCH.need) * 100).toFixed(0) + '%';
+        if (isTouch) $('#bShake').classList.toggle('hide', !T0.fault);
+      }
       let hemi, spot, fill, torchGroup, torchLens, pool = [], poolTimer = 0, petals = null, explored = null;
       const net = { r: null, kind: 'none', set(p) { if (this.r) this.r.presence(p).catch(() => { }); } };
       const isTouch = (window.matchMedia && matchMedia('(pointer:coarse)').matches) || ('ontouchstart' in window);
@@ -2013,7 +2196,7 @@
       document.addEventListener('pointerlockerror', lockErr);
 
       // ---- actions
-      function actFlash() { P.flash = !P.flash; }
+      function actFlash() { if (Torch.dead) { toast(isTouch ? 'The flashlight is dead — hold 🫨 to shake it' : 'The flashlight is dead — hold right mouse to shake it'); return; } P.flash = !P.flash; }
       function actNight() {
         if (!has('nighteyes')) return;
         if (!P.night && P.energy < 8) { toast('Night Eyes needs to recharge'); return; }
@@ -2048,6 +2231,10 @@
         P.yaw -= e.movementX * k; P.pitch = clamp(P.pitch - e.movementY * k * (CFG.inv ? -1 : 1), -1.45, 1.45);
       });
       renderer.domElement.addEventListener('mousedown', () => { if (started && !paused && !document.pointerLockElement) tryLock(); });
+      window.addEventListener('mousedown', (e) => { if (e.button === 2) torchShake(true); });
+      window.addEventListener('mouseup', (e) => { if (e.button === 2) torchShake(false); });
+      window.addEventListener('contextmenu', (e) => { if (started) e.preventDefault(); });
+      window.addEventListener('blur', () => torchShake(false));
 
       // ---- touch controls
       if (isTouch) {
@@ -2071,6 +2258,7 @@
         const bind = (id, fn) => $(id).addEventListener('touchstart', (e) => { e.preventDefault(); fn(); }, { passive: false });
         bind('#bJump', () => keys.add('Space')); $('#bJump').addEventListener('touchend', () => keys.delete('Space'));
         $('#bRun').addEventListener('touchstart', (e) => { e.preventDefault(); touchSprint = true; }, { passive: false }); $('#bRun').addEventListener('touchend', () => { touchSprint = false; });
+        bind('#bShake', () => torchShake(true)); $('#bShake').addEventListener('touchend', () => torchShake(false)); $('#bShake').addEventListener('touchcancel', () => torchShake(false));
         bind('#bMenu', openPause); bind('#bFlash', actFlash); bind('#bQ', actNight); bind('#bE', actBeacon); bind('#bG', actFlare);
       }
 
@@ -2079,7 +2267,7 @@
         let mx = 0, mz = 0;
         if (keys.has('KeyW') || keys.has('ArrowUp')) mz += 1; if (keys.has('KeyS') || keys.has('ArrowDown')) mz -= 1;
         if (keys.has('KeyA') || keys.has('ArrowLeft')) mx -= 1; if (keys.has('KeyD') || keys.has('ArrowRight')) mx += 1;
-        mx += joy.x; mz -= joy.y; const len = Math.hypot(mx, mz); if (len > 1) { mx /= len; mz /= len; }
+        mx += joy.x; mz -= joy.y; if (P.down > 0) mx = mz = 0; const len = Math.hypot(mx, mz); if (len > 1) { mx /= len; mz /= len; }
         const maxStam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1);
         if (lockFailed && !document.pointerLockElement && !isTouch) {
           const nx = mX / innerWidth * 2 - 1, ny = mY / innerHeight * 2 - 1, k = CFG.sens / 100;
@@ -2098,7 +2286,7 @@
         const moved = Math.hypot(P.x - ox, P.z - oz); P.speed = lerp(P.speed, moved / dt, .2);
         // vertical
         const gh = groundH(P.x, P.z);
-        if (keys.has('Space') && P.grounded) { P.vy = has('springheel') ? 8.8 : 5; P.grounded = false; Aud.jump(); }
+        if (keys.has('Space') && P.grounded && P.down <= 0) { P.vy = has('springheel') ? 8.8 : 5; P.grounded = false; Aud.jump(); }
         P.vy -= 16 * dt; P.y += P.vy * dt;
         const tp = tileType(P.x, P.z), outdoor = (tp === 3 || tp === 4);
         if (!outdoor && P.y > WH - 1.9) { P.y = WH - 1.9; P.vy = Math.min(P.vy, 0); }
@@ -2108,15 +2296,17 @@
         else P.bob += 0;
         // camera
         const bobY = P.grounded ? Math.sin(P.bob) * .035 * Math.min(1, P.speed / 3) : 0;
-        camera.position.set(P.x, 1.62 + P.y + bobY, P.z); camera.rotation.set(P.pitch, P.yaw, Math.sin(P.bob * .5) * .004 * Math.min(1, P.speed / 3));
+        camera.position.set(P.x, 1.62 + P.y + bobY - 1.15 * P.dnK, P.z); camera.rotation.set(P.pitch, P.yaw, Math.sin(P.bob * .5) * .004 * Math.min(1, P.speed / 3) + P.dnK * .5);
         if (Scare.shake > .002) { const k = Scare.shake; camera.rotation.x += (Math.random() - .5) * .07 * k; camera.rotation.y += (Math.random() - .5) * .07 * k; camera.rotation.z += (Math.random() - .5) * .05 * k; Scare.shake *= Math.exp(-5 * dt); }
+        updateHealth(dt, t);
         // flashlight
+        updateTorch(dt);
         const lant = has('lantern');
         P.flickT -= dt; if (P.flickT <= 0 && Math.random() < .004) P.flickT = .18;
-        const fk = P.flickT > 0 ? (.15 + Math.random() * .9) : 1;
+        const fk = (P.flickT > 0 ? (.15 + Math.random() * .9) : 1) * Torch.k;
         spot.visible = P.flash; spot.intensity = 2.4 * (lant ? 1.5 : 1) * (me.q === 'nightblind' ? .55 : 1) * fk; spot.angle = lant ? .64 : .5; spot.distance = lant ? 54 : 40;
-        fill.intensity = (P.flash ? .4 : .18) + (has('warmsoul') ? .9 : 0);
-        torchLens.material.color.setHex(P.flash ? 0xfff6d8 : 0x444444);
+        fill.intensity = (lightOn() ? .4 : .18) + (has('warmsoul') ? .9 : 0);
+        torchLens.material.color.setHex(lightOn() ? 0xfff6d8 : 0x444444); torchGroup.position.set(.25 + Torch.sx, -.22 + Torch.sy, -.45); torchGroup.rotation.z = Torch.sx * 4;
         // night eyes
         if (P.night) { P.energy -= 9 * dt; if (P.energy <= 0) { P.energy = 0; P.night = false; $('#nv').classList.remove('on'); toast('Night Eyes exhausted'); } }
         else P.energy = Math.min(100, P.energy + 5 * dt);
@@ -2133,7 +2323,7 @@
         updateGates(dt, t); updateScares(dt);
         if (!P.escaped && gateOpen() && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) doEscape();
         // network
-        sendT += dt; if (sendT > .08) { sendT = 0; const r2 = (n) => +n.toFixed(2); net.set({ x: r2(P.x), y: r2(P.y), z: r2(P.z), ry: r2(P.yaw), rp: r2(P.pitch), f: P.flash ? 1 : 0 }); }
+        sendT += dt; if (sendT > .08) { sendT = 0; const r2 = (n) => +n.toFixed(2); net.set({ x: r2(P.x), y: r2(P.y), z: r2(P.z), ry: r2(P.yaw), rp: r2(P.pitch), f: lightOn() ? 1 : 0 }); }
         // HUD
         hudT += dt; if (hudT > .25) { hudT = 0; hudTick(); }
         if (has('cartographer')) { mmT += dt; if (mmT > .15) { mmT = 0; drawMap(); } }
@@ -2173,6 +2363,7 @@
       function hudTick() {
         const maxStam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1);
         $('#stamFill').style.width = (P.stam / maxStam * 100) + '%'; $('#stamFill').classList.toggle('low', P.exh);
+        $('#hpFill').style.width = (P.hp / HEALTH.max * 100) + '%'; $('#hpFill').classList.toggle('low', P.hp < HEALTH.max * HEALTH.lowAt / 100); $('#hpN').textContent = Math.ceil(P.hp);
         $('#nrgFill').style.width = P.energy + '%'; $('#flareN').textContent = P.flares;
         const deg = ((-P.yaw * 180 / Math.PI) % 360 + 360) % 360; $('#heading').textContent = CARD[Math.round(deg / 45) % 8] + ' ' + String(Math.round(deg)).padStart(3, '0') + '°';
         const tm = $('#team'); tm.innerHTML = '';
@@ -2215,8 +2406,8 @@
       function enterGame() {
         Aud.init(); Aud.resume();
         started = true; if (previewAv) previewAv.visible = false; camera.clearViewOffset(); torchGroup.visible = true;
-        let sx, sz, n = 0; do { sx = 8 + Math.random() * 7; sz = 46.5 + Math.random() * 5; n++; } while (n < 25 && [...remotes.values()].some(r => Math.hypot(r.x - sx, r.z - sz) < 1.3));
-        P.x = sx; P.z = sz; P.yaw = Math.PI / 4; P.pitch = 0; P.y = 0; P.stam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1); P.flares = has('flares') ? 5 : 0; P.energy = 100;
+        const sp0 = startSpot(); P.hp = HEALTH.max; P.hpT = 0; P.down = 0; P.dnK = 0;
+        P.x = sp0.x; P.z = sp0.z; P.yaw = Math.PI / 4; P.pitch = 0; P.y = 0; P.stam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1); P.flares = has('flares') ? 5 : 0; P.energy = 100;
         $('#reveal').classList.add('hide'); buildHud();
         net.set({ x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, f: 1, e: 0 });
         tryLock();

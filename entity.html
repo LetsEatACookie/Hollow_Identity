@@ -21,7 +21,7 @@ const MIMIC = {
   life: 80,                                   // gives up after this many seconds
   hearRange: 26, hearFull: 4,                 // its voice: full volume inside hearFull, silent beyond hearRange
   creep: 3.0, creepWatched: .9,               // speed when you're not looking · when you look at it with no light
-  biteR: 1.25,                                // contact range
+  biteR: 1.25, biteDmg: 35,                   // contact range · health lost per bite
   exposeS: 1.3, exposeDist: 9                 // keep your flashlight on it this long, this close, and the disguise breaks
 };
 
@@ -197,7 +197,7 @@ function mimicExpose() {
 }
 function mimicBite() {
   mimicHollowOut(); Aud.stinger(1); scareFlash(true); Scare.shake = 1;
-  P.flickT = 4; P.stam = 0; P.exh = true;                       // your torch gutters and your legs give out
+  P.flickT = 4; P.stam = 0; P.exh = true; damagePlayer(MIMIC.biteDmg);   // your torch gutters, your legs give out, and it hurts
   toast('It was never ' + (Mim.self ? 'you' : Mim.name) + '.'); mimicVanish();
 }
 
@@ -213,7 +213,7 @@ function updateMimic(dt, t) {
   const av = Mim.av; Mim.life += dt;
   const dx = P.x - Mim.x, dz = P.z - Mim.z, dist = Math.hypot(dx, dz), los = mimicLOS(Mim.x, Mim.z, P.x, P.z);
   const cosA = dist > .01 ? (-dx * -Math.sin(P.yaw) - dz * -Math.cos(P.yaw)) / dist : 1;      // 1 = you're looking straight at it
-  const watched = los && dist < 32 && cosA > .82, inBeam = P.flash && los && dist < MIMIC.exposeDist && cosA > .95;
+  const watched = los && dist < 32 && cosA > .82, inBeam = lightOn() && los && dist < MIMIC.exposeDist && cosA > .95;
   // the real person it is wearing wandering close, or leaving, ruins the trick
   if (Mim.targetId != null && (Mim.st === 'lure' || Mim.st === 'stalk')) {
     const tr = remotes.get(Mim.targetId); if (!tr || Math.hypot(tr.x - Mim.x, tr.z - Mim.z) < 9) { mimicVanish(); }
@@ -232,7 +232,7 @@ function updateMimic(dt, t) {
     if (Mim.expose > MIMIC.exposeS) mimicExpose();
     else {
       // weeping-angel rule: it freezes while your light is on it, creeps when you look without one, and rushes when you look away
-      const sp = (watched && P.flash) ? 0 : watched ? MIMIC.creepWatched : MIMIC.creep + Math.min(1.2, Mim.life * .02);
+      const sp = (watched && lightOn()) ? 0 : watched ? MIMIC.creepWatched : MIMIC.creep + Math.min(1.2, Mim.life * .02);
       Mim.pathT -= dt; if (Mim.pathT <= 0) { Mim.pathT = .6; Mim.path = mimicPath(Mim.x, Mim.z, P.x, P.z); }
       if (sp > 0) {
         let tx = P.x, tz = P.z;
