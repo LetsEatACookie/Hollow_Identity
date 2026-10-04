@@ -1503,14 +1503,14 @@
     // Loads characters.html + maps.html + entity.html before the game starts. Needs http(s): GitHub Pages, Netlify, VS Code Live Server... (not a double-clicked file://)
     (function () {
       try {
-        ['characters.html', 'maps.html', 'entity.html', 'library.html'].forEach(function (f) {
+        ['characters.html', 'maps.html', 'entity.html', 'library.html', 'castle.html'].forEach(function (f) {
           var x = new XMLHttpRequest(); x.open('GET', f, false); x.send();
           if (x.status >= 400 || !x.responseText) throw new Error(f + ' not found');
           var el = new DOMParser().parseFromString(x.responseText, 'text/html').querySelector('script');
           var s = document.createElement('script'); s.textContent = el.textContent + '\n//# sourceURL=' + f; document.head.appendChild(s);
         });
       } catch (e) {
-        document.body.insertAdjacentHTML('beforeend', '<div class="loaderr"><b>Couldn\u2019t load characters.html / maps.html / entity.html / library.html.</b><br>Open the game through a web server (Live Server, GitHub Pages, Netlify) and keep all four files in the same folder.</div>');
+        document.body.insertAdjacentHTML('beforeend', '<div class="loaderr"><b>Couldn\u2019t load characters.html / maps.html / entity.html / library.html / castle.html.</b><br>Open the game through a web server (Live Server, GitHub Pages, Netlify) and keep all five files in the same folder.</div>');
         throw e;
       }
     })();
@@ -2292,7 +2292,7 @@
         if (!outdoor && P.y > WH - 1.9) { P.y = WH - 1.9; P.vy = Math.min(P.vy, 0); }
         if (P.y <= gh) { P.y = gh; P.vy = 0; P.grounded = true; } else if (P.y > gh + .02) P.grounded = false;
         // steps + bob
-        if (P.grounded && moved > 0) { P.stepAcc += moved; P.bob += moved * 2.6; if (P.stepAcc > (sprinting ? 2.3 : 1.8)) { P.stepAcc = 0; Aud.step((sprinting ? 1 : .6) * (me.q === 'loud' ? 1.6 : 1), world.lib ? 'wood' : tp === 3 || tp === 4 ? 'grass' : tp === 2 ? 'moss' : 'stone'); } }
+        if (P.grounded && moved > 0) { P.stepAcc += moved; P.bob += moved * 2.6; if (P.stepAcc > (sprinting ? 2.3 : 1.8)) { P.stepAcc = 0; Aud.step((sprinting ? 1 : .6) * (me.q === 'loud' ? 1.6 : 1), world.castle ? 'stone' : world.lib ? 'wood' : tp === 3 || tp === 4 ? 'grass' : tp === 2 ? 'moss' : 'stone'); } }
         else P.bob += 0;
         // camera
         const bobY = P.grounded ? Math.sin(P.bob) * .035 * Math.min(1, P.speed / 3) : 0;
@@ -2373,7 +2373,7 @@
         };
         row(me.name, accHex(), P.escaped ? '✓ out' : 'you', true);
         for (const r of remotes.values()) { row(r.name, '#' + new THREE.Color(r.sk.accent).getHexString(), r.pr.e ? '✓ out' : Math.round(Math.hypot(r.x - P.x, r.z - P.z)) + ' m'); }
-        if (netOn) $('#room').textContent = `ROOM ${code} · ${remotes.size + 1} explorer${remotes.size ? 's' : ''}${world.lib ? ' · LIBRARY' : ''}${LV > 1 ? ' · LVL ' + (LV + 1) : ''}`; else $('#room').textContent = 'SOLO' + (world.lib ? ' · LIBRARY' : '') + (LV > 1 ? ' · LVL ' + (LV + 1) : '');
+        if (netOn) $('#room').textContent = `ROOM ${code} · ${remotes.size + 1} explorer${remotes.size ? 's' : ''}${world.lib ? (world.castle ? ' · CASTLE' : ' · LIBRARY') : ''}${LV > 1 ? ' · LVL ' + (LV + 1) : ''}`; else $('#room').textContent = 'SOLO' + (world.lib ? (world.castle ? ' · CASTLE' : ' · LIBRARY') : '') + (LV > 1 ? ' · LVL ' + (LV + 1) : '');
       }
       // [moved to maps.html]
 
@@ -2741,7 +2741,7 @@
       function applyAll() { camera.fov = CFG.fov; camera.updateProjectionMatrix(); applyRes(); applyLights(); if (Aud.m) Aud.m.gain.value = CFG.vol / 100; $('#grain').style.display = CFG.grain ? '' : 'none'; if (!CFG.fps) $('#fps').classList.add('hide'); }
       // ---- per-frame culling. Chunks (see IL.build) are hidden when they are behind you or too far away.
       // Small detail is dropped sooner than walls: by then it is mostly fog anyway. Levels can cap the distance too (world.maxDist).
-      const LOD_CAPS = { tuft: 24, fern: 24, bush: 22, stem: 20, bloom: 20, mcap: 18, mstem: 18, ivy: 32, vine: 30, leafy: 28, lantB: 34, lantC: 34, web: 22, ladder: 28, candle: 24, flame: 24, book: 20, chand: 34 };
+      const LOD_CAPS = { tuft: 24, fern: 24, bush: 22, stem: 20, bloom: 20, mcap: 18, mstem: 18, ivy: 32, vine: 30, leafy: 28, lantB: 34, lantC: 34, web: 22, ladder: 28, candle: 24, flame: 24, book: 20, chand: 34, sconce: 30, banA: 30, banB: 30, banC: 30, armor: 26, chain: 26, slit: 30, brazier: 30 };
       let visChunks = 0;
       // ---- if one object has a broken geometry, three.js throws and the WHOLE frame stays black (it only happens while that object is in view,
       // which is why it seemed to depend on the direction you look). We find the culprit(s), switch them off and keep rendering.

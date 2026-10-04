@@ -68,11 +68,21 @@ function libGen(R) {
       else if (type === 5 && R() < .85 && (Math.abs(ox - (w - 1) / 2) > 1 || Math.abs(oy - (h - 1) / 2) > 1)) { g[I(x, y)] = 1; kd[I(x, y)] = 1; }   // pillars
     }
   };
-  // the way out: a hall at the far east end
-  const ex0 = W - 10, ey0 = 1 + 2 * Math.floor(R() * ((H - 10 - 1) / 2 + 1));
-  place(ex0, ey0, 9, 9, 6);
-  for (const [px, py] of [[1, 1], [7, 1], [1, 7], [7, 7]]) { g[I(ex0 + px, ey0 + py)] = 1; kd[I(ex0 + px, ey0 + py)] = 1; }
-  const site = { tx: ex0 + 4, ty: ey0 + 4, x: (ex0 + 4.5) * T, z: (ey0 + 4.5) * T };
+  // the ways out: several exit halls (the first one always at the far east end). Only ONE gate is open at a time and it hops between them
+  // on the shared schedule (see buildGates / updateGates in maps.html). EXIT_SITES is the same knob the garden uses.
+  const sites = [], nxE = Math.floor((W - 2 - 8 - 13) / 2) + 1, nyE = Math.floor((H - 2 - 8 - 1) / 2) + 1;
+  for (let n = 0, sep = 28; n < EXIT_SITES; n++) {
+    let got = null;
+    for (let k = 0; k < 600 && !got; k++) {
+      const x0 = n === 0 ? W - 10 : 13 + 2 * Math.floor(R() * nxE), y0 = 1 + 2 * Math.floor(R() * nyE);
+      if (fits(x0, y0, 9, 9) && sites.every(s => Math.hypot(s.tx - (x0 + 4), s.ty - (y0 + 4)) >= sep)) got = [x0, y0];
+      else if (k % 100 === 99 && sep > 12) sep -= 4;           // cramped? relax the spacing a little
+    }
+    if (!got) break;
+    const [ex0, ey0] = got; place(ex0, ey0, 9, 9, 6);
+    for (const [px, py] of [[1, 1], [7, 1], [1, 7], [7, 7]]) { g[I(ex0 + px, ey0 + py)] = 1; kd[I(ex0 + px, ey0 + py)] = 1; }
+    sites.push({ tx: ex0 + 4, ty: ey0 + 4, x: (ex0 + 4.5) * T, z: (ey0 + 4.5) * T });
+  }
   // two great halls, then the reading rooms
   let atria = 0;
   for (let k = 0; k < 80 && atria < 2; k++) {
@@ -90,7 +100,7 @@ function libGen(R) {
     }
   }
   return {
-    g, tt, kd, rooms, R, sites: [site], exit: site, lib: true, cy,
+    g, tt, kd, rooms, R, sites, exit: sites[0], lib: true, cy,
     spawn: { x0: 2 * T, x1: 5.6 * T, z0: (cy + .6) * T, z1: (cy + 3.4) * T },
     maxDist: LIB.maxDist, fogD: LIB.fog, fogN: LIB.fogNight, fogColor: LIB.fogColor, hemi: LIB.hemi, mmS: LIB.mm
   };
@@ -217,11 +227,11 @@ function libAssets(Q) {
 }
 
 // dust motes hanging in the lamplight (the same drifting-points shader as the garden fireflies, in a warmer colour)
-function libDust(list, R) {
+function libDust(list, R, col) {
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(list, 3));
   const ph = new Float32Array(list.length / 3); for (let i = 0; i < ph.length; i++)ph[i] = R();
   geo.setAttribute('aPh', new THREE.BufferAttribute(ph, 1));
-  const m = fireMat(); m.fragmentShader = m.fragmentShader.replace('vec3(.85,1.,.45)', 'vec3(1.,.82,.5)');
+  const m = fireMat(); m.fragmentShader = m.fragmentShader.replace('vec3(.85,1.,.45)', col || 'vec3(1.,.82,.5)');
   const p = new THREE.Points(geo, m); p.frustumCulled = false; return p;
 }
 
@@ -311,7 +321,7 @@ function libBuild(world, Q) {
       }
     }
   }
-  // chandeliers over the great halls, and a cold light over the way out
+  // chandeliers over the great halls (each exit hall is lit by its own gate, only while that gate is open)
   for (const r of rooms) {
     const mx = TC(r.x0 + (r.w - 1) / 2), mz = TC(r.y0 + (r.h - 1) / 2);
     if (r.type === 5) {
@@ -322,7 +332,6 @@ function libBuild(world, Q) {
         LIGHTS.push({ x: cx, y: 3.1, z: mz, col: 0xffc88a, int: 2.8, d: 20, fl: .1, ph: R() * 10, w: 2 });
       }
     }
-    if (r.type === 6) LIGHTS.push({ x: mx, y: 3.4, z: mz, col: 0x7dffc8, int: 1.4, d: 22, fl: 0, ph: 0, w: 1.3 });
   }
   const mk2 = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
   mk2('shelfA', G.wall, A.lib.shelfA); mk2('shelfB', G.wall, A.lib.shelfB); mk2('shelfC', G.wall, A.lib.shelfC); mk2('panel', G.wall, A.lib.panel);
@@ -357,7 +366,7 @@ function libTeardown() {
   const w = world; if (!w) return;
   if (w.root) {
     scene.remove(w.root);
-    const sg = new Set([...Object.values(G), ...Object.values(LG)]), sm = new Set(); for (const k in A) if (A[k] && A[k].isMaterial) sm.add(A[k]); if (A.lib) for (const k in A.lib) if (A.lib[k] && A.lib[k].isMaterial) sm.add(A.lib[k]);
+    const sg = new Set([...Object.values(G), ...Object.values(LG), ...Object.values(CG)]), sm = new Set(); for (const k in A) if (A[k] && A[k].isMaterial) sm.add(A[k]); for (const set of [A.lib, A.cas]) if (set) for (const k in set) if (set[k] && set[k].isMaterial) sm.add(set[k]);
     w.root.traverse(o => {
       if (o.isInstancedMesh && o.dispose) o.dispose();
       if (o.geometry && !sg.has(o.geometry)) o.geometry.dispose();
@@ -372,32 +381,34 @@ function libTeardown() {
 }
 function libEnv(w) {        // fog, background, ambient light and sky for whichever level you are on
   scene.fog.color.setHex(w.fogColor || 0x03070a); scene.background.setHex(w.fogColor || 0x02050a); scene.fog.density = w.fogD || .04;
-  hemi.color.setHex(w.lib ? 0x6a5030 : 0x3b5f6e); hemi.groundColor.setHex(w.lib ? 0x1a110a : 0x10170f);
+  hemi.color.setHex(w.hemiCol || (w.lib ? 0x6a5030 : 0x3b5f6e)); hemi.groundColor.setHex(w.hemiGnd || (w.lib ? 0x1a110a : 0x10170f));
   for (const o of SKYOBJ) o.visible = !w.lib;
 }
-// Every open gate leads to the next level: 0 garden -> 1 library -> 2 garden -> 3 library -> ... (new seed each time, same for the whole room)
-const lvIsLib = (n) => n % 2 === 1;
+// Every open gate leads to the next level: 0 garden -> 1 library -> 2 castle -> 3 garden -> 4 library -> 5 castle -> ... (new seed each time, same for the whole room)
+const LV_KINDS = ['garden', 'library', 'castle'], LV_NAMES = ['The Garden', 'The Library', 'The Castle'];
+const lvKind = (n) => n % 3;
 async function libEnter() {
   if (lvBusy || !world || !started) return; lvBusy = true;
-  const n = LV + 1, lib = lvIsLib(n);
+  const n = LV + 1, kind = lvKind(n), indoor = kind !== 0;
   P.freeze = true; keys.clear(); joy.x = joy.y = 0; touchSprint = false; Torch.shaking = false;
-  Aud.shift(); libFade(true, 'LEVEL ' + (n + 1), lib ? 'The Library' : 'The Garden');
+  Aud.shift(); libFade(true, 'LEVEL ' + (n + 1), LV_NAMES[kind]);
   await wait(1100);
   try {
     libTeardown(); LV = n;
     Torch.fault = false; Torch.dead = false; Torch.ft = 0; Torch.prog = 0; Torch.k = 1; Torch.next = TORCH.first;   // fresh flashlight on every new level
-    if (lib) world = libBuild(libGen(mulberry32(hashStr(code + '|library' + (n > 1 ? '|' + n : '')))), Q);
+    if (kind === 1) world = libBuild(libGen(mulberry32(hashStr(code + '|library' + (n > 1 ? '|' + n : '')))), Q);
+    else if (kind === 2) world = casBuild(casGen(mulberry32(hashStr(code + '|castle|' + n))), Q);
     else { GW = 41; GH = 31; world = buildWorld(genWorld(mulberry32(hashStr(code + '|garden|' + n))), Q); }
     const w = world;
     explored = new Uint8Array(GW * GH);
     const mm = $('#mm'); mm.width = GW * (w.mmS || 5); mm.height = GH * (w.mmS || 5);
     libEnv(w);
-    const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = lib ? -Math.PI / 2 : Math.PI / 4; P.pitch = 0; P.flickT = .5;
+    const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = indoor ? -Math.PI / 2 : Math.PI / 4; P.pitch = 0; P.flickT = .5;
     if (Mim.st !== 'idle') mimicEnd(); Mim.t = Math.max(Mim.t, 75);
     if (Scare.act) endScare(); Scare.quiet = 35;
     applyRes(); startT = tNow; await frame();
     net.set({ lv: LV, x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, e: 0 });
-    await wait(500); libFade(false); toast('Level ' + (n + 1) + ' \u2014 ' + (lib ? 'the Library' : 'the Garden') + '. Find the way out.');
+    await wait(500); libFade(false); toast('Level ' + (n + 1) + ' \u2014 ' + LV_NAMES[kind].replace('The', 'the') + '. Find the way out.');
   } catch (err) {
     console.error('[hollow] level failed to build', err);
     libFade(true, 'LEVEL FAILED TO LOAD', String(err && err.message || err)); lvBusy = false; return;

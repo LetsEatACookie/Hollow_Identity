@@ -342,6 +342,7 @@ function drawMap() {
     if (!explored[ty * GW + tx]) continue; const v = world.g[ty * GW + tx], tp = world.tt[ty * GW + tx];
     if (world.lib) {      // the library has its own colours
       const k = world.kd[ty * GW + tx];
+      if (world.castle) { x.fillStyle = v === 1 ? (k === 0 ? '#1d2027' : k === 1 ? '#444a58' : k === 3 ? '#8a6a2a' : '#4a3a28') : tp === 6 ? ((Math.abs(tx - ax.tx) <= 4 && Math.abs(ty - ax.ty) <= 4) ? '#35d6a0' : '#3a463d') : tp === 5 ? '#3a4260' : tp === 2 ? '#3a2a30' : tp === 1 ? '#4a4435' : '#2c3037'; x.fillRect(tx * s, ty * s, s, s); continue; }
       x.fillStyle = v === 1 ? (k === 0 ? '#2b1d14' : k === 1 ? '#3c3c44' : '#5a4028') : tp === 6 ? ((Math.abs(tx - ax.tx) <= 4 && Math.abs(ty - ax.ty) <= 4) ? '#35d6a0' : '#3a463d') : tp === 5 ? '#6a4a2a' : tp === 2 ? '#5a2a2a' : tp === 1 ? '#4a4435' : '#3a3228';
       x.fillRect(tx * s, ty * s, s, s); continue;
     }
