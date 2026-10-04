@@ -1939,42 +1939,39 @@
         $('#hurt').style.opacity = Math.min(1, Math.max(P.hurt * .85, pulse, P.down > 0 ? .55 : 0)).toFixed(3);
       }
       // ---------- flashlight fault: every few minutes the torch starts to flicker and gets worse until you shake it (hold right mouse) ----------
-      const TORCH = { first: 90, minGap: 120, maxGap: 240, need: 1.3, needDead: 2.4, ramp: 30, die: 50 };   // seconds: first fault · gap between faults · hold time to fix · hold time to revive a dead torch · time to reach the worst flicker · time until it dies if ignored
-      const Torch = { next: TORCH.first, fault: false, dead: false, warned: false, ft: 0, prog: 0, shaking: false, k: 1, chop: 0, rattle: 0, sx: 0, sy: 0 };
+      const TORCH = { first: 90, minGap: 120, maxGap: 240, need: 1.3, needDead: 2.4, die: 60 };   // seconds: first fault · gap between faults · hold time to fix a fading torch · hold time to revive a dead one · time for it to fade to black if ignored
+      const Torch = { next: TORCH.first, fault: false, dead: false, ft: 0, prog: 0, shaking: false, k: 1, chop: 0, rattle: 0, sx: 0, sy: 0 };
       const lightOn = () => P.flash && Torch.k > .3;      // is my beam actually lit right now?
       function torchShake(on) { Torch.shaking = !!on && started && !paused; }
       function updateTorch(dt) {
         const T0 = Torch;
         if (paused) T0.shaking = false;
-        if (!T0.fault && !paused && !P.escaped) { T0.next -= dt; if (T0.next <= 0) { T0.fault = true; T0.dead = false; T0.warned = false; T0.ft = 0; T0.prog = 0; T0.chop = 0; $('#shakeTxt').innerHTML = isTouch ? 'Your flashlight is flickering — hold <b>🫨</b> to shake it' : 'Your flashlight is flickering — hold <b>right mouse</b> to shake it'; toast('Your flashlight is flickering…'); } }
-        let sev = 0;
+        // a fault gives no warning: the beam just starts to fade, dimmer and dimmer, until it is black
+        if (!T0.fault && !paused && !P.escaped) { T0.next -= dt; if (T0.next <= 0) { T0.fault = true; T0.dead = false; T0.ft = 0; T0.prog = 0; } }
+        let fixed = false;
         if (T0.fault) {
           T0.ft += dt;
           if (T0.shaking) T0.prog += dt; else T0.prog = Math.max(0, T0.prog - dt * .5);
-          if (!T0.dead && !T0.warned && T0.ft > TORCH.die - 12) { T0.warned = true; toast('The flashlight is dying…'); }
-          if (!T0.dead && T0.ft > TORCH.die) {          // ignored for too long: it goes out completely
-            T0.dead = true; T0.prog = 0; T0.k = 0; Aud.tone(420, 50, .5, .14, 'sawtooth'); Aud.burst(300, .3, .1, .8); toast('Your flashlight died');
-            $('#shakeTxt').innerHTML = isTouch ? 'Your flashlight died — hold <b>🫨</b> to shake it back to life' : 'Your flashlight died — hold <b>right mouse</b> to shake it back to life';
+          if (!T0.dead && T0.ft > TORCH.die) {          // silently goes out; only now does the game tell you what to do about it
+            T0.dead = true; T0.prog = 0; T0.k = 0;
+            $('#shakeTxt').innerHTML = isTouch ? 'Your flashlight is dead — hold <b>🫨</b> to shake it back to life' : 'Your flashlight is dead — hold <b>right mouse</b> to shake it back to life';
           }
           const need = T0.dead ? TORCH.needDead : TORCH.need;
           if (T0.prog >= need) {
-            const wasDead = T0.dead; if (wasDead) P.flickT = .7;   // it coughs back to life
-            T0.fault = false; T0.dead = false; T0.prog = 0; T0.k = 1; T0.next = TORCH.minGap + Math.random() * (TORCH.maxGap - TORCH.minGap);
+            const wasDead = T0.dead; if (wasDead) P.flickT = .7;   // a dead torch coughs back to life
+            T0.fault = false; T0.dead = false; T0.prog = 0; T0.k = wasDead ? 0 : T0.k; fixed = true; T0.next = TORCH.minGap + Math.random() * (TORCH.maxGap - TORCH.minGap);
             Aud.tone(1500, 900, .08, .12, 'square'); setTimeout(() => Aud.tone(900, 1300, .1, .08), 90); toast(wasDead ? 'The flashlight comes back to life' : 'The flashlight steadies');
-          } else sev = T0.dead ? 0 : Math.min(1, .25 + T0.ft / TORCH.ramp * .75) * (1 - T0.prog / need * .85);
+          } else if (T0.dead) T0.k = 0;
+          else { const base = Math.pow(Math.max(0, 1 - T0.ft / TORCH.die), 1.3); T0.k = base + (1 - base) * (T0.prog / need); }   // shaking it brings the light back up while you do it
         }
-        if (T0.dead) T0.k = 0;
-        else if (sev > 0) {                                 // random bursts of dark and glare, longer and more frequent as it gets worse
-          T0.chop -= dt;
-          if (T0.chop <= 0) { const dark = Math.random() < sev * .6; T0.k = dark ? .02 : .45 + Math.random() * .55; T0.chop = dark ? .04 + Math.random() * .2 * (.5 + sev) : .08 + Math.random() * 1.1 * (1.2 - sev); }
-        } else T0.k = lerp(T0.k, 1, 1 - Math.exp(-14 * dt));
+        if (!T0.fault) T0.k = lerp(T0.k, 1, 1 - Math.exp(-(fixed ? 9 : 14) * dt));
         // the shake itself: the torch rattles in your hand
         if (T0.shaking) {
           T0.rattle -= dt; if (T0.rattle <= 0) { T0.rattle = .11; Aud.burst(1700 + Math.random() * 600, .05, .07, 2.5); }
           T0.sx = (Math.random() - .5) * .07; T0.sy = (Math.random() - .5) * .07;
         } else { T0.sx *= .6; T0.sy *= .6; }
-        $('#shakeUI').classList.toggle('hide', !T0.fault); if (T0.fault) $('#shakeBar').style.width = (T0.prog / (T0.dead ? TORCH.needDead : TORCH.need) * 100).toFixed(0) + '%';
-        if (isTouch) $('#bShake').classList.toggle('hide', !T0.fault);
+        $('#shakeUI').classList.toggle('hide', !T0.dead); if (T0.dead) $('#shakeBar').style.width = (T0.prog / TORCH.needDead * 100).toFixed(0) + '%';
+        if (isTouch) $('#bShake').classList.toggle('hide', !T0.dead);
       }
       let hemi, spot, fill, torchGroup, torchLens, pool = [], poolTimer = 0, petals = null, explored = null;
       const net = { r: null, kind: 'none', set(p) { if (this.r) this.r.presence(p).catch(() => { }); } };
@@ -2163,7 +2160,8 @@
           r.ry += angDiff(r.ry, pr.ry || 0) * k; r.rp += ((pr.rp || 0) - r.rp) * k;
           r.av.position.set(r.x, r.y, r.z); r.av.rotation.y = r.ry; poseAvatar(r.av, r.speed, t, r.rp, !!pr.f);
           const pk = Array.isArray(pr.pk) ? pr.pk : [];
-          r.light.x = r.x; r.light.z = r.z; r.light.y = r.y + 1.6; r.light.int = (pr.f ? .9 : 0) + (pk.includes('warmsoul') ? 1.1 : 0);
+          r.light.x = r.x; r.light.z = r.z; r.light.y = r.y + 1.6; r.light.int = (+pr.f || 0) * .9 + (pk.includes('warmsoul') ? 1.1 : 0);
+          { const bm = r.av.userData.beam; if (bm) bm.material.uniforms.uI.value = +pr.f || 0; }
           const dist = Math.hypot(r.x - P.x, r.z - P.z);
           r.stepAcc += moved; if (r.stepAcc > 1.9) { r.stepAcc = 0; const v = clamp(1 - dist / (pr.q === 'loud' ? 34 : 20), 0, 1); if (v > .02 && started) Aud.step(v * (pr.q === 'loud' ? 1.6 : .7), tileType(r.x, r.z) === 3 ? 'grass' : 'stone'); }
           if (pk.includes('breadcrumbs')) { r.trailAcc += moved; if (r.trailAcc > 1.1) { r.trailAcc = 0; addPetal(r.x, r.z, r.sk.accent); } }
@@ -2304,9 +2302,9 @@
         const lant = has('lantern');
         P.flickT -= dt; if (P.flickT <= 0 && Math.random() < .004) P.flickT = .18;
         const fk = (P.flickT > 0 ? (.15 + Math.random() * .9) : 1) * Torch.k;
-        spot.visible = P.flash; spot.intensity = 2.4 * (lant ? 1.5 : 1) * (me.q === 'nightblind' ? .55 : 1) * fk; spot.angle = lant ? .64 : .5; spot.distance = lant ? 54 : 40;
-        fill.intensity = (lightOn() ? .4 : .18) + (has('warmsoul') ? .9 : 0);
-        torchLens.material.color.setHex(lightOn() ? 0xfff6d8 : 0x444444); torchGroup.position.set(.25 + Torch.sx, -.22 + Torch.sy, -.45); torchGroup.rotation.z = Torch.sx * 4;
+        spot.visible = P.flash; spot.intensity = 2.4 * (lant ? 1.5 : 1) * (me.q === 'nightblind' ? .55 : 1) * fk; spot.angle = lant ? .64 : .5; spot.distance = (lant ? 54 : 40) * (.4 + .6 * Torch.k);
+        fill.intensity = (.18 + .22 * (P.flash ? Torch.k : 0)) + (has('warmsoul') ? .9 : 0);
+        { const kk = P.flash ? Torch.k : 0; torchLens.material.color.setRGB(.27 + .73 * kk, .27 + .69 * kk, .27 + .58 * kk); } torchGroup.position.set(.25 + Torch.sx, -.22 + Torch.sy, -.45); torchGroup.rotation.z = Torch.sx * 4;
         // night eyes
         if (P.night) { P.energy -= 9 * dt; if (P.energy <= 0) { P.energy = 0; P.night = false; $('#nv').classList.remove('on'); toast('Night Eyes exhausted'); } }
         else P.energy = Math.min(100, P.energy + 5 * dt);
@@ -2323,7 +2321,7 @@
         updateGates(dt, t); updateScares(dt);
         if (!P.escaped && gateOpen() && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) doEscape();
         // network
-        sendT += dt; if (sendT > .08) { sendT = 0; const r2 = (n) => +n.toFixed(2); net.set({ x: r2(P.x), y: r2(P.y), z: r2(P.z), ry: r2(P.yaw), rp: r2(P.pitch), f: lightOn() ? 1 : 0 }); }
+        sendT += dt; if (sendT > .08) { sendT = 0; const r2 = (n) => +n.toFixed(2); net.set({ x: r2(P.x), y: r2(P.y), z: r2(P.z), ry: r2(P.yaw), rp: r2(P.pitch), f: P.flash ? +Math.max(0, Math.min(1, Torch.k)).toFixed(1) : 0 }); }
         // HUD
         hudT += dt; if (hudT > .25) { hudT = 0; hudTick(); }
         if (has('cartographer')) { mmT += dt; if (mmT > .15) { mmT = 0; drawMap(); } }
