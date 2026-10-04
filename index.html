@@ -1351,6 +1351,7 @@
       <div class="set"><label for="sVol">Volume</label><input id="sVol" type="range" min="0" max="100"
           step="5"><output></output></div>
       <div class="set"><label for="sGrain">Film grain</label><input id="sGrain" type="checkbox"></div>
+      <div class="set"><label for="sScare">Jumpscares</label><input id="sScare" type="checkbox"></div>
       <div class="set"><label for="sFps">Show FPS</label><input id="sFps" type="checkbox"></div>
       <div class="set"><span>Voice chat</span><button type="button" class="q" id="vcPause">Enable mic</button></div>
       <div class="set hide" id="pRoomRow"><span>Room code</span><b id="pCode"></b><button type="button" class="q"
@@ -1652,6 +1653,8 @@
       // [moved to characters.html]
 
       // ---------- procedural audio (no files) ----------
+      // Garden ambience level (0 = silent). The old 4.3 kHz cricket buzz is gone; this is a soft leaf rustle + a rare far-off owl.
+      const GARDEN_VOL = .014;
       const Aud = {
         ctx: null,
         init() {
@@ -1662,13 +1665,16 @@
           const wg = c.createGain(); wg.gain.value = .05; const lfo = c.createOscillator(); lfo.frequency.value = .07; const lg = c.createGain(); lg.gain.value = .03; lfo.connect(lg); lg.connect(wg.gain); lfo.start();
           ws.connect(wf); wf.connect(wg); wg.connect(this.m); ws.start();
           [55, 82.4, 110.6].forEach((f, i) => { const o = c.createOscillator(); o.type = i ? 'sine' : 'triangle'; o.frequency.value = f; const g = c.createGain(); g.gain.value = [.035, .02, .012][i]; o.connect(g); g.connect(this.m); o.start(); });
-          const co = c.createOscillator(); co.frequency.value = 4300; const ca = c.createGain(); ca.gain.value = .5;
-          const cl = c.createOscillator(); cl.type = 'square'; cl.frequency.value = 13; const clg = c.createGain(); clg.gain.value = .5; cl.connect(clg); clg.connect(ca.gain);
-          this.cg = c.createGain(); this.cg.gain.value = 0; co.connect(ca); ca.connect(this.cg); this.cg.connect(this.m); co.start(); cl.start();
+          // garden bed: soft rustling leaves (band-passed noise that slowly 'breathes')
+          const gs = c.createBufferSource(); gs.buffer = b; gs.loop = true; const gf = c.createBiquadFilter(); gf.type = 'bandpass'; gf.frequency.value = 1100; gf.Q.value = .45;
+          const gl = c.createBiquadFilter(); gl.type = 'lowpass'; gl.frequency.value = 2200; const ga = c.createGain(); ga.gain.value = .5;
+          const glfo = c.createOscillator(); glfo.frequency.value = .11; const glg = c.createGain(); glg.gain.value = .35; glfo.connect(glg); glg.connect(ga.gain); glfo.start();
+          this.cg = c.createGain(); this.cg.gain.value = 0; gs.connect(gf); gf.connect(gl); gl.connect(ga); ga.connect(this.cg); this.cg.connect(this.m); gs.start(0, .7);
+          this.nextBird = c.currentTime + 10; this.gOut = 0;
           this.nextDrip = c.currentTime + 4;
         },
         resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
-        garden(f) { if (this.cg) this.cg.gain.value = lerp(this.cg.gain.value, f * .011, .05); },
+        garden(f) { this.gOut = f; if (this.cg) this.cg.gain.value = lerp(this.cg.gain.value, f * GARDEN_VOL, .05); },
         tone(f0, f1, dur, vol, type = 'sine') {
           if (!this.ctx) return; const c = this.ctx, o = c.createOscillator(), g = c.createGain(); o.type = type;
           o.frequency.setValueAtTime(f0, c.currentTime); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), c.currentTime + dur);
@@ -1682,12 +1688,103 @@
           s.connect(f); f.connect(g); g.connect(this.m); s.start(c.currentTime, Math.random() * 1.5, dur + .05);
         },
         step(v, type) { this.burst(type === 'grass' ? 1500 : type === 'moss' ? 800 : 560, .11, .2 * v, type === 'grass' ? .6 : 1.4); },
-        update() { if (this.ctx && this.ctx.currentTime > this.nextDrip) { this.tone(1300 + Math.random() * 600, 420, .22, .05); this.nextDrip = this.ctx.currentTime + 3 + Math.random() * 9; } },
+        update() {
+          if (!this.ctx) return; const n = this.ctx.currentTime;
+          if (n > this.nextDrip) { this.tone(1300 + Math.random() * 600, 420, .22, .05); this.nextDrip = n + 3 + Math.random() * 9; }
+          if (this.gOut > .5 && n > this.nextBird) { this.hoot(); this.nextBird = n + 14 + Math.random() * 22; }
+        },
+        soft(f0, f1, dur, vol) {      // gentle tone with a slow fade-in (no click)
+          if (!this.ctx) return; const c = this.ctx, t = c.currentTime, o = c.createOscillator(), g = c.createGain(); o.type = 'sine';
+          o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+          g.gain.setValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(vol, t + dur * .35); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+          o.connect(g); g.connect(this.m); o.start(t); o.stop(t + dur + .05);
+        },
+        hoot() { const f = 300 + Math.random() * 60; this.soft(f, f * .94, .6, .03); setTimeout(() => this.soft(f * .97, f * .86, .9, .026), 620); },
+        rumble() { this.tone(55, 38, 1.6, .16); this.burst(180, 1.4, .18, .8); },                                    // gate is about to move
+        shift() { this.tone(160, 520, .9, .06, 'triangle'); this.tone(520, 130, 1.4, .07); this.burst(900, .8, .1, .7); },   // gate moved
+        stinger(p = 1) {                                                                                           // jumpscare hit
+          if (!this.ctx) return; const v = SCARE.volume * p;
+          this.burst(2600, .35, .4 * v, .5); this.burst(140, .5, .5 * v, .7);
+          for (const f of [233, 247, 311]) this.tone(f * 3, f, .55, .1 * v, 'sawtooth');
+          this.tone(62, 36, .6, .4 * v);
+        },
         ping() { this.tone(880, 1320, .5, .12); setTimeout(() => this.tone(1320, 1760, .6, .08), 120); },
         flare() { this.burst(2200, .5, .18, .5); },
         jump() { this.burst(300, .12, .1, .8); },
         win() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => this.tone(f, f * 1.003, 1.2, .1, 'triangle'), i * 160)); }
       };
+      // ---------- jumpscares: something might be waiting just around a corner ----------
+      // Only you see/hear them (they aren't synced to teammates). Corners come from world.scares (maps.html).
+      const SCARE = { firstDelay: 60, minGap: 45, maxGap: 95, volume: .8 };   // seconds before the first one · gap between scares · stinger loudness
+      const Scare = { quiet: SCARE.firstDelay, act: null, fig: null, fx: null, shake: 0, tile: -1, from: null, far: null, wld: null, map: null };
+      function scareFigure() {
+        if (Scare.fig) return Scare.fig;
+        const g = new THREE.Group(), dark = new THREE.MeshBasicMaterial({ color: 0x040506 }), pale = new THREE.MeshBasicMaterial({ color: 0xb4bbb2 });
+        const add = (geo, mat, x, y, z, sx = 1, sy = 1, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, 1); m.rotation.z = rz; g.add(m); return m; };
+        add(new THREE.CylinderGeometry(.2, .38, 1.4, 10), dark, 0, .9, 0);                 // long coat
+        add(new THREE.CylinderGeometry(.07, .1, .3, 8), dark, 0, 1.68, 0);                 // neck
+        const head = new THREE.Mesh(new THREE.SphereGeometry(.17, 12, 10), pale); head.scale.set(.85, 1.3, .9); head.position.y = 1.95; g.add(head);
+        for (const sx of [-1, 1]) {
+          add(new THREE.CircleGeometry(.035, 8), dark, sx * .065, 2.0, .14);                // hollow eyes
+          add(new THREE.CylinderGeometry(.04, .03, 1.25, 6), dark, sx * .3, .95, 0, 1, 1, -sx * .1);   // long arms
+        }
+        add(new THREE.CircleGeometry(.03, 8), dark, 0, 1.89, .152, 1, 2.2);                 // hollow mouth
+        g.scale.setScalar(1.05); g.visible = false; scene.add(g); return (Scare.fig = g);
+      }
+      function scareFlash(strong) {
+        let f = Scare.fx; if (!f) { f = Scare.fx = document.createElement('div'); f.style.cssText = 'position:fixed;inset:0;z-index:14;pointer-events:none;opacity:0'; document.body.appendChild(f); }
+        f.style.background = 'radial-gradient(ellipse at center,rgba(255,255,255,.35) 0%,rgba(90,0,0,.5) 55%,rgba(0,0,0,.95) 100%)';
+        f.style.transition = 'none'; f.style.opacity = strong ? 1 : .6; void f.offsetWidth; f.style.transition = 'opacity .7s ease-out'; f.style.opacity = 0;
+      }
+      function endScare() { const a = Scare.act; if (!a) return; Scare.fig.visible = false; Scare.act = null; Scare.quiet = SCARE.minGap + Math.random() * (SCARE.maxGap - SCARE.minGap); }
+      function startScare(s, far) {
+        const f = scareFigure(), r = Math.random(), kind = r < .45 ? 'lunge' : r < .8 ? 'peek' : 'flicker';
+        s.used = true; f.position.set(s.x + far.dx * T * 2.2, 0, s.z + far.dy * T * 2.2); f.visible = true;
+        Scare.act = { kind, s, far, t: 0, go: false, hit: 0 };
+        if (kind === 'flicker') P.flickT = .35; else Aud.soft(90, 140, .5, .07);
+      }
+      function updateScares(dt) {
+        if (Scare.wld !== world) { Scare.wld = world; Scare.map = new Map((world.scares || []).map(q => [q.ty * GW + q.tx, q])); Scare.tile = -1; }
+        // which corner tile am I in, and which arm did I walk in from?
+        const cur = Math.floor(P.z / T) * GW + Math.floor(P.x / T);
+        if (cur !== Scare.tile) {
+          const prev = Scare.tile; Scare.tile = cur; Scare.from = Scare.far = null;
+          const s = Scare.map.get(cur);
+          if (s && s.armed && !s.used && prev >= 0) {
+            const px = prev % GW, py = (prev / GW) | 0, i = s.arms.findIndex(a => s.tx + a.dx === px && s.ty + a.dy === py);
+            if (i >= 0) { Scare.from = s.arms[i]; Scare.far = s.arms[1 - i]; }
+          }
+        }
+        const a = Scare.act;
+        if (a) {
+          const f = Scare.fig; a.t += dt;
+          const dx = P.x - f.position.x, dz = P.z - f.position.z, dist = Math.hypot(dx, dz);
+          f.rotation.y = Math.atan2(dx, dz);
+          if (a.kind === 'lunge') {
+            if (!a.go && a.t > .45) { a.go = true; Aud.stinger(1); scareFlash(false); Scare.shake = .6; }
+            if (a.go) {
+              const cs = a.s, toC = Math.hypot(cs.x - f.position.x, cs.z - f.position.z), tx = toC > .6 ? cs.x : P.x, tz = toC > .6 ? cs.z : P.z;
+              const d = Math.hypot(tx - f.position.x, tz - f.position.z) || 1, st = Math.min(d, 10.5 * dt);
+              f.position.x += (tx - f.position.x) / d * st; f.position.z += (tz - f.position.z) / d * st; f.rotation.x = .25;
+              if (dist < 1.2) { Aud.stinger(.6); scareFlash(true); Scare.shake = 1; f.rotation.x = 0; endScare(); return; }
+            }
+          } else if (a.kind === 'peek') {
+            if (!a.go && a.t > .25) { a.go = true; Aud.stinger(.55); Scare.shake = .35; }
+            if (a.t > .95) f.visible = Math.sin(a.t * 90) > 0;               // blink out
+            if (a.t > 1.15 || (a.go && dist < T * 1.3)) { if (dist < T * 1.3) Aud.burst(700, .25, .12, 1); endScare(); return; }
+          } else {                                                            // flicker: the lights stutter and it's suddenly closer
+            if (!a.go && a.t > .5) { a.go = true; f.position.set(a.s.x + a.far.dx * T * .9, 0, a.s.z + a.far.dy * T * .9); P.flickT = .25; Aud.stinger(.9); scareFlash(false); Scare.shake = .6; }
+            if (a.t > .95) { endScare(); return; }
+          }
+          if (a.t > 2.5) endScare();
+          return;
+        }
+        if (Scare.quiet > 0) { if (!paused) Scare.quiet -= dt; return; }
+        if (!CFG.scares || paused || P.escaped || !Scare.far) return;
+        // turned to look down the new corridor?
+        if (-Math.sin(P.yaw) * Scare.far.dx + -Math.cos(P.yaw) * Scare.far.dy > .8) startScare(Scare.map.get(Scare.tile), Scare.far);
+      }
+
       // ============ PART 4a — runtime systems ============
       const Q_HIGH = { tex: 512, aniso: 4, bump: 0, dens: .75, pool: 4, pr: Math.min(window.devicePixelRatio || 1, 1.25), glow: 1 };
       const Q_LOW = { tex: 256, aniso: 2, bump: 0, dens: .4, pool: 2, pr: .7, glow: 1 };
@@ -1697,7 +1794,7 @@
       let hemi, spot, fill, torchGroup, torchLens, pool = [], poolTimer = 0, petals = null, explored = null;
       const net = { r: null, kind: 'none', set(p) { if (this.r) this.r.presence(p).catch(() => { }); } };
       const isTouch = (window.matchMedia && matchMedia('(pointer:coarse)').matches) || ('ontouchstart' in window);
-      const CFG = Object.assign({ v: 2, res: 100, auto: true, dist: 45, lights: 3, fov: 72, sens: 100, inv: false, vol: 85, fps: true, grain: false }, (() => { try { const o = JSON.parse(localStorage.getItem('hg-set') || '{}'); return o.v === 2 ? o : {}; } catch (e) { return {}; } })());
+      const CFG = Object.assign({ v: 2, res: 100, auto: true, dist: 45, lights: 3, fov: 72, sens: 100, inv: false, vol: 85, fps: true, grain: false, scares: true }, (() => { try { const o = JSON.parse(localStorage.getItem('hg-set') || '{}'); return o.v === 2 ? o : {}; } catch (e) { return {}; } })());
       const saveS = () => { try { localStorage.setItem('hg-set', JSON.stringify(CFG)); } catch (e) { } };
       let autoK = 1, paused = false, everLocked = false, pauseT = 0, mX = innerWidth / 2, mY = innerHeight / 2, fpsAcc = 0, fpsN = 0, adaptT = 0, upN = 0, lockToast = false, bdDown = false, leaveArm = 0;
       const frustum = new THREE.Frustum(), pvm = new THREE.Matrix4(), CHUNKS = [];
@@ -1737,7 +1834,7 @@
         if (poolTimer <= 0) {
           poolTimer = .12; const list = [];
           const consider = (c) => { const dx = c.x - cx, dz = c.z - cz, dy = (c.y - cy) * .5, d2 = dx * dx + dz * dz + dy * dy, lim = c.d * 1.15; if (d2 < lim * lim) list.push([d2 / (c.w || 1), c]); };
-          for (const c of LIGHTS) consider(c);
+          for (const c of LIGHTS) if (c.int > .01) consider(c);
           for (const c of DYN) if (c.int > .01) consider(c);
           list.sort((a, b) => a[0] - b[0]);
           const chosen = list.slice(0, Math.min(pool.length, CFG.lights)).map(e => e[1]), cs = new Set(chosen);
@@ -2010,6 +2107,7 @@
         // camera
         const bobY = P.grounded ? Math.sin(P.bob) * .035 * Math.min(1, P.speed / 3) : 0;
         camera.position.set(P.x, 1.62 + P.y + bobY, P.z); camera.rotation.set(P.pitch, P.yaw, Math.sin(P.bob * .5) * .004 * Math.min(1, P.speed / 3));
+        if (Scare.shake > .002) { const k = Scare.shake; camera.rotation.x += (Math.random() - .5) * .07 * k; camera.rotation.y += (Math.random() - .5) * .07 * k; camera.rotation.z += (Math.random() - .5) * .05 * k; Scare.shake *= Math.exp(-5 * dt); }
         // flashlight
         const lant = has('lantern');
         P.flickT -= dt; if (P.flickT <= 0 && Math.random() < .004) P.flickT = .18;
@@ -2029,8 +2127,9 @@
         // exploration (minimap)
         const ptx = Math.floor(P.x / T), pty = Math.floor(P.z / T);
         for (let y = -3; y <= 3; y++)for (let x = -3; x <= 3; x++) { const nx = ptx + x, ny = pty + y; if (nx >= 0 && ny >= 0 && nx < GW && ny < GH && x * x + y * y <= 10) explored[ny * GW + nx] = 1; }
-        // the way out
-        if (!P.escaped && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) doEscape();
+        // the way out (the open gate moves on a schedule — see updateGates in maps.html) + jumpscares
+        updateGates(dt, t); updateScares(dt);
+        if (!P.escaped && gateOpen() && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) doEscape();
         // network
         sendT += dt; if (sendT > .08) { sendT = 0; const r2 = (n) => +n.toFixed(2); net.set({ x: r2(P.x), y: r2(P.y), z: r2(P.z), ry: r2(P.yaw), rp: r2(P.pitch), f: P.flash ? 1 : 0 }); }
         // HUD
@@ -2461,7 +2560,7 @@
         if (fps < 54) { upN = 0; if (autoK > .4) { autoK = Math.max(.4, autoK - (fps < 38 ? .15 : .08)); adaptT = 1.6; applyRes(); } }
         else if (fps > 58 && autoK < 1) { if (++upN >= 4) { upN = 0; autoK = Math.min(1, autoK + .05); applyRes(); } }
       }
-      const SETS = [['sRes', 'res', 'change'], ['sDist', 'dist', 'input'], ['sLights', 'lights', 'change'], ['sFov', 'fov', 'input'], ['sSens', 'sens', 'input'], ['sVol', 'vol', 'input']], CHK = [['sAuto', 'auto'], ['sInv', 'inv'], ['sFps', 'fps'], ['sGrain', 'grain']], UN = { res: '%', dist: ' m', lights: '', fov: '°', sens: '%', vol: '%' };
+      const SETS = [['sRes', 'res', 'change'], ['sDist', 'dist', 'input'], ['sLights', 'lights', 'change'], ['sFov', 'fov', 'input'], ['sSens', 'sens', 'input'], ['sVol', 'vol', 'input']], CHK = [['sAuto', 'auto'], ['sInv', 'inv'], ['sFps', 'fps'], ['sGrain', 'grain'], ['sScare', 'scares']], UN = { res: '%', dist: ' m', lights: '', fov: '°', sens: '%', vol: '%' };
       function syncUI() { for (const [id, k] of SETS) { const el = $('#' + id); el.value = CFG[k]; el.nextElementSibling.textContent = CFG[k] + UN[k]; } for (const [id, k] of CHK) $('#' + id).checked = !!CFG[k]; }
       for (const [id, k, ev] of SETS) { const el = $('#' + id); el.addEventListener('input', () => { el.nextElementSibling.textContent = el.value + UN[k]; }); el.addEventListener(ev, () => { CFG[k] = +el.value; if (world) applyAll(); }); }
       for (const [id, k] of CHK) $('#' + id).addEventListener('change', (e) => { CFG[k] = e.target.checked; if (world) applyAll(); });

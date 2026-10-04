@@ -13,6 +13,10 @@
 'use strict';
 // ---- world constants
 const T = 3.2, WH = 4.4, GW = 41, GH = 31;
+// ---- the way out hops between gate sites. Tune these:
+const EXIT_SITES = 4;        // how many places the gate can appear
+const EXIT_SHIFT_S = 150;    // the open gate moves to a new site every this many seconds
+const EXIT_WARN_S = 15;      // the gate starts flickering this many seconds before it moves
 
 // ---------- maze generation (deterministic from the room code) ----------
 function genWorld(R) {
@@ -48,9 +52,20 @@ function genWorld(R) {
       if (type === 3) { const mx = Math.round(cxo), my = Math.round(cyo); g[I(mx, my)] = 3; }
     }
   };
-  const cand = []; for (let ex = 23; ex <= 35; ex += 2)for (let ey = 1; ey <= 25; ey += 2)cand.push([ex, ey]);
-  const [ex0, ey0] = cand[(R() * cand.length) | 0];
-  place(ex0, ey0, 5, 5, 4);                             // the way out
+  // the way out can be in several places ("sites"); only one gate is open at a time (see exitIdxAt / updateGates)
+  const sites = [], farC = [], anyC = [];
+  for (let ex = 13; ex <= 35; ex += 2)for (let ey = 1; ey <= 25; ey += 2) { anyC.push([ex, ey]); if (ex >= 23) farC.push([ex, ey]); }
+  for (let n = 0, sep = 13; n < EXIT_SITES; n++) {
+    const src = n === 0 ? farC : anyC; let got = null;
+    for (let k = 0; k < 400 && !got; k++) {
+      const c = src[(R() * src.length) | 0];
+      if (sites.every(q => Math.hypot(q.tx - c[0], q.ty - c[1]) >= sep)) got = c;
+      else if (k % 100 === 99 && sep > 7) sep -= 2;     // cramped? relax the spacing a little
+    }
+    if (!got) break;
+    place(got[0], got[1], 5, 5, 4);                     // a moonlit gate garden
+    sites.push({ tx: got[0], ty: got[1], x: (got[0] + 2.5) * T, z: (got[1] + 2.5) * T });
+  }
   const sizes = [5, 5, 7, 5, 7];
   for (let n = 0; n < 9; n++) {
     const w = pick(sizes, R), h = pick(sizes, R);
@@ -62,7 +77,7 @@ function genWorld(R) {
       if (ok) { place(x0, y0, w, h, R() < .45 ? 3 : 2); break; }
     }
   }
-  return { g, tt, rooms, R, exit: { x: (ex0 + 2.5) * T, z: (ey0 + 2.5) * T } };
+  return { g, tt, rooms, R, sites, exit: sites[0] };
 }
 
 function glowPoints(list, size, tex) {
@@ -177,7 +192,8 @@ function buildWorld(world, Q) {
 
   // ---- special places: start room + exit gate
   buildStartRoom(root, glowL, glowS);
-  buildGate(root, world, glowL);
+  buildGates(root, world);
+  world.scares = findScareSpots(world);
   if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
   if (glowL.length) root.add(glowPoints(glowL, Q.glow * 2.2, A.tex.glow));
   if (fire.length) {
@@ -218,28 +234,91 @@ function buildStartRoom(root, glowL, glowS) {
   LIGHTS.push({ x: hx, y: 2.2, z: hz + .1, col: 0xffb45a, int: 1.8, d: 10, fl: .2, ph: 3, w: 1.5 });
 }
 
-function buildGate(root, world, glowL) {
-  const gx = world.exit.x, gz = world.exit.z;
+// ---------- exit schedule: same for everyone in a room (room code + wall clock), so no extra networking ----------
+function exitOrder(code, K, cyc) {
+  const mk = (c) => shuffle([...Array(K).keys()], mulberry32(hashStr(code + '|exit|' + c)));
+  const o = mk(cyc);
+  if (K > 2 && o[0] === mk(cyc - 1)[K - 1]) { const t = o[0]; o[0] = o[1]; o[1] = t; }   // never open the same gate twice in a row
+  return o;
+}
+function exitEpoch() { return Math.floor(Date.now() / (EXIT_SHIFT_S * 1000)); }
+function exitIdxAt(code, K, epoch) { return exitOrder(code, K, Math.floor(epoch / K))[((epoch % K) + K) % K]; }
+
+function buildGates(root, world) {
   const stone = LitMat({ color: 0x6d7a68, map: A.tex.wall, roughness: .9 });
-  const grp = new THREE.Group(); grp.position.set(gx, 0, gz); root.add(grp);
-  for (const s of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(.55, 2.6, .55), stone); p.position.set(0, 1.3, s * 1.65); grp.add(p); }
-  const arch = new THREE.Mesh(new THREE.TorusGeometry(1.65, .28, 8, 28, Math.PI), stone); arch.rotation.y = Math.PI / 2; arch.position.y = 2.6; grp.add(arch);
-  const portalMat = new THREE.ShaderMaterial({
-    uniforms: { uTime }, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-    vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
-    fragmentShader: `varying vec2 vUv;uniform float uTime;
-    void main(){vec2 p=(vUv-.5)*vec2(1.,1.3);float r=length(p);float a=atan(p.y,p.x);
-    float w=.5+.5*sin(a*5.+uTime*1.4-r*18.);float rings=.5+.5*sin(r*22.-uTime*3.);
-    float mask=smoothstep(.55,.15,r);vec3 c=mix(vec3(.1,.6,.5),vec3(.6,1.,.8),w*rings);
-    gl_FragColor=vec4(c*mask*(.7+.5*w),mask*.8);}`});
-  const portal = new THREE.Mesh(new THREE.PlaneGeometry(3.3, 4.6), portalMat); portal.rotation.y = Math.PI / 2; portal.position.y = 2.3; grp.add(portal);
-  glowL.push([gx, 2.2, gz, .4, 1, .8]);
-  LIGHTS.push({ id: 'gate', x: gx, y: 2.3, z: gz, col: 0x66ffc8, int: 2.6, d: 18, fl: .1, ph: 2, w: 3 });
-  // sign
   const c = document.createElement('canvas'); c.width = 512; c.height = 96; const x = c.getContext('2d');
   x.font = '600 54px Cinzel, Georgia, serif'; x.textAlign = 'center'; x.fillStyle = 'rgba(170,255,225,0.95)'; x.shadowColor = '#4dffc0'; x.shadowBlur = 18; x.fillText('THE WAY OUT', 256, 64);
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-  sp.scale.set(4, .75, 1); sp.position.set(0, 4.2, 0); grp.add(sp);
+  const signTex = new THREE.CanvasTexture(c);
+  world.gates = world.sites.map((st, i) => {
+    const gx = st.x, gz = st.z;
+    const grp = new THREE.Group(); grp.position.set(gx, 0, gz); root.add(grp);
+    for (const sd of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(.55, 2.6, .55), stone); p.position.set(0, 1.3, sd * 1.65); grp.add(p); }
+    const arch = new THREE.Mesh(new THREE.TorusGeometry(1.65, .28, 8, 28, Math.PI), stone); arch.rotation.y = Math.PI / 2; arch.position.y = 2.6; grp.add(arch);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uTime, uK: { value: 1 } }, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+      fragmentShader: `varying vec2 vUv;uniform float uTime;uniform float uK;
+      void main(){vec2 p=(vUv-.5)*vec2(1.,1.3);float r=length(p);float a=atan(p.y,p.x);
+      float w=.5+.5*sin(a*5.+uTime*1.4-r*18.);float rings=.5+.5*sin(r*22.-uTime*3.);
+      float mask=smoothstep(.55,.15,r);vec3 c=mix(vec3(.1,.6,.5),vec3(.6,1.,.8),w*rings);
+      gl_FragColor=vec4(c*mask*(.7+.5*w)*uK,mask*.8*uK);}`});
+    const portal = new THREE.Mesh(new THREE.PlaneGeometry(3.3, 4.6), mat); portal.rotation.y = Math.PI / 2; portal.position.y = 2.3; grp.add(portal);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: A.tex.glow, color: 0x66ffc8, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: .9 }));
+    glow.scale.set(2.6, 2.6, 1); glow.position.y = 2.2; grp.add(glow);
+    const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    sign.scale.set(4, .75, 1); sign.position.set(0, 4.2, 0); grp.add(sign);
+    const light = { id: 'gate', x: gx, y: 2.3, z: gz, col: 0x66ffc8, int: 0, base: 2.6, d: 18, fl: .1, ph: 2 + i, w: 3 };
+    LIGHTS.push(light);
+    return { st, grp, portal, mat, glow, sign, light, k: 0 };
+  });
+  world.activeIdx = exitIdxAt(code, world.gates.length, exitEpoch());
+  world.exit = world.sites[world.activeIdx]; world.warned = false;
+  world.gates.forEach((G, i) => { G.k = i === world.activeIdx ? 1 : 0; setGateLook(G, G.k); });
+}
+
+function setGateLook(G, v) {
+  const on = v > .02;
+  G.portal.visible = G.glow.visible = G.sign.visible = on;
+  if (!on) { G.light.int = 0; return; }
+  G.mat.uniforms.uK.value = v; G.portal.scale.setScalar(.35 + .65 * Math.min(1, v));
+  G.glow.material.opacity = .9 * v; G.sign.material.opacity = v; G.light.int = G.light.base * v;
+}
+function gateOpen() { const G = world.gates && world.gates[world.activeIdx]; return !!G && G.k > .6; }
+
+// called every frame: moves the open gate on schedule, flickers it as a warning, fades gates in/out
+function updateGates(dt, t) {
+  const gs = world.gates; if (!gs) return;
+  const per = EXIT_SHIFT_S * 1000, now = Date.now(), want = exitIdxAt(code, gs.length, Math.floor(now / per)), left = (per - (now % per)) / 1000;
+  if (want !== world.activeIdx) {
+    world.activeIdx = want; world.exit = world.sites[want]; world.warned = false;
+    toast('The way out has moved.'); Aud.shift();
+  }
+  const warn = left < EXIT_WARN_S;
+  if (warn && !world.warned) { world.warned = true; toast('The gate is flickering… it won’t stay here long.'); Aud.rumble(); }
+  for (let i = 0; i < gs.length; i++) {
+    const G = gs[i], on = i === world.activeIdx;
+    G.k = lerp(G.k, on ? 1 : 0, 1 - Math.exp(-(on ? 1.1 : 3) * dt));
+    if (!on && G.k < .02) G.k = 0;
+    const flick = on && warn ? .62 + .38 * Math.sin(t * (9 + (EXIT_WARN_S - left) * 2.2)) * Math.sin(t * 3.1) : 1;
+    setGateLook(G, G.k * flick);
+  }
+}
+
+// ---------- scare spots: bends in the corridors, where you can't see what's waiting until you turn the corner ----------
+function findScareSpots(world) {
+  const { g, tt } = world, I = (x, y) => y * GW + x, out = [];
+  const open = (x, y) => x >= 0 && y >= 0 && x < GW && y < GH && g[I(x, y)] === 0;
+  const run = (x, y, dx, dy) => { let n = 0; while (n < 4 && open(x + dx * (n + 1), y + dy * (n + 1))) n++; return n; };
+  for (let ty = 1; ty < GH - 1; ty++)for (let tx = 11; tx < GW - 1; tx++) {   // tx >= 11: nothing near the start room
+    if (g[I(tx, ty)] !== 0 || tt[I(tx, ty)] !== 0) continue;
+    const arms = [];
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (open(tx + dx, ty + dy)) arms.push({ dx, dy, n: run(tx, ty, dx, dy) });
+    if (arms.length !== 2) continue;
+    const [a, b] = arms; if (a.dx + b.dx === 0 && a.dy + b.dy === 0) continue;      // straight corridor, not a bend
+    if (a.n < 2 || b.n < 2) continue;                                                // needs a couple of tiles of corridor to appear in
+    out.push({ tx, ty, x: (tx + .5) * T, z: (ty + .5) * T, arms, armed: Math.random() < .3, used: false });
+  }
+  return out;
 }
 
 function buildSky() {
@@ -256,10 +335,10 @@ function buildSky() {
 }
 
 function drawMap() {
-  const c = $('#mm'), x = c.getContext('2d'), s = 5; x.fillStyle = '#070b09'; x.fillRect(0, 0, c.width, c.height);
+  const c = $('#mm'), x = c.getContext('2d'), s = 5, ax = world.exit; x.fillStyle = '#070b09'; x.fillRect(0, 0, c.width, c.height);
   for (let ty = 0; ty < GH; ty++)for (let tx = 0; tx < GW; tx++) {
     if (!explored[ty * GW + tx]) continue; const v = world.g[ty * GW + tx], tp = world.tt[ty * GW + tx];
-    x.fillStyle = v === 1 ? '#161d18' : v === 2 ? '#1f4a2a' : v === 3 ? '#2d6b3d' : tp === 4 ? '#35d6a0' : tp === 3 ? '#2a5a38' : tp === 2 ? '#344a2c' : tp === 1 ? '#4a4435' : '#3a463d';
+    x.fillStyle = v === 1 ? '#161d18' : v === 2 ? '#1f4a2a' : v === 3 ? '#2d6b3d' : tp === 4 ? ((tx >= ax.tx && tx < ax.tx + 5 && ty >= ax.ty && ty < ax.ty + 5) ? '#35d6a0' : '#2a5a38') : tp === 3 ? '#2a5a38' : tp === 2 ? '#344a2c' : tp === 1 ? '#4a4435' : '#3a463d';
     x.fillRect(tx * s, ty * s, s, s);
   }
   if (explored[Math.floor(world.exit.z / T) * GW + Math.floor(world.exit.x / T)]) { x.fillStyle = '#6dffd0'; x.beginPath(); x.arc(world.exit.x / T * s, world.exit.z / T * s, 3.5, 0, 7); x.fill(); }
