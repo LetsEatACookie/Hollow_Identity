@@ -22,7 +22,7 @@ const LIB = {
   fog: .052, fogNight: .034, fogColor: 0x0b0806, hemi: .26,
   mm: 3                    // minimap pixels per tile
 };
-let LV = 0, lvBusy = false;    // current level: 0 = garden, 1 = library
+let LV = 0, lvBusy = false;    // current level number (0 = first garden, 1 = library, 2 = next garden, ...)
 const LG = {};                 // library geometries (A.lib holds the materials)
 
 // ---------- generation (deterministic from the room code) ----------
@@ -375,23 +375,27 @@ function libEnv(w) {        // fog, background, ambient light and sky for whiche
   hemi.color.setHex(w.lib ? 0x6a5030 : 0x3b5f6e); hemi.groundColor.setHex(w.lib ? 0x1a110a : 0x10170f);
   for (const o of SKYOBJ) o.visible = !w.lib;
 }
+// Every open gate leads to the next level: 0 garden -> 1 library -> 2 garden -> 3 library -> ... (new seed each time, same for the whole room)
+const lvIsLib = (n) => n % 2 === 1;
 async function libEnter() {
-  if (lvBusy || LV !== 0 || !world || !started) return; lvBusy = true;
+  if (lvBusy || !world || !started) return; lvBusy = true;
+  const n = LV + 1, lib = lvIsLib(n);
   P.freeze = true; keys.clear(); joy.x = joy.y = 0; touchSprint = false; Torch.shaking = false;
-  Aud.shift(); libFade(true, 'LEVEL 2', 'The Library');
+  Aud.shift(); libFade(true, 'LEVEL ' + (n + 1), lib ? 'The Library' : 'The Garden');
   await wait(1100);
-  libTeardown(); LV = 1;
-  const w = libGen(mulberry32(hashStr(code + '|library')));
-  world = libBuild(w, Q);
+  libTeardown(); LV = n;
+  if (lib) world = libBuild(libGen(mulberry32(hashStr(code + '|library' + (n > 1 ? '|' + n : '')))), Q);
+  else { GW = 41; GH = 31; world = buildWorld(genWorld(mulberry32(hashStr(code + '|garden|' + n))), Q); }
+  const w = world;
   explored = new Uint8Array(GW * GH);
-  const mm = $('#mm'); mm.width = GW * w.mmS; mm.height = GH * w.mmS;
+  const mm = $('#mm'); mm.width = GW * (w.mmS || 5); mm.height = GH * (w.mmS || 5);
   libEnv(w);
-  const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = -Math.PI / 2; P.pitch = 0; P.flickT = .5;
+  const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = lib ? -Math.PI / 2 : Math.PI / 4; P.pitch = 0; P.flickT = .5;
   if (Mim.st !== 'idle') mimicEnd(); Mim.t = Math.max(Mim.t, 75);
   if (Scare.act) endScare(); Scare.quiet = 35;
   applyRes(); startT = tNow; await frame();
-  net.set({ lv: 1, x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, e: 0 });
-  await wait(500); libFade(false); toast('Level 2 — the Library. Find the way out.');
+  net.set({ lv: LV, x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, e: 0 });
+  await wait(500); libFade(false); toast('Level ' + (n + 1) + ' \u2014 ' + (lib ? 'the Library' : 'the Garden') + '. Find the way out.');
   P.freeze = false; lvBusy = false;
 }
   </script>

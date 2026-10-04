@@ -2292,7 +2292,7 @@
         if (!outdoor && P.y > WH - 1.9) { P.y = WH - 1.9; P.vy = Math.min(P.vy, 0); }
         if (P.y <= gh) { P.y = gh; P.vy = 0; P.grounded = true; } else if (P.y > gh + .02) P.grounded = false;
         // steps + bob
-        if (P.grounded && moved > 0) { P.stepAcc += moved; P.bob += moved * 2.6; if (P.stepAcc > (sprinting ? 2.3 : 1.8)) { P.stepAcc = 0; Aud.step((sprinting ? 1 : .6) * (me.q === 'loud' ? 1.6 : 1), LV ? 'wood' : tp === 3 || tp === 4 ? 'grass' : tp === 2 ? 'moss' : 'stone'); } }
+        if (P.grounded && moved > 0) { P.stepAcc += moved; P.bob += moved * 2.6; if (P.stepAcc > (sprinting ? 2.3 : 1.8)) { P.stepAcc = 0; Aud.step((sprinting ? 1 : .6) * (me.q === 'loud' ? 1.6 : 1), world.lib ? 'wood' : tp === 3 || tp === 4 ? 'grass' : tp === 2 ? 'moss' : 'stone'); } }
         else P.bob += 0;
         // camera
         const bobY = P.grounded ? Math.sin(P.bob) * .035 * Math.min(1, P.speed / 3) : 0;
@@ -2321,7 +2321,7 @@
         for (let y = -3; y <= 3; y++)for (let x = -3; x <= 3; x++) { const nx = ptx + x, ny = pty + y; if (nx >= 0 && ny >= 0 && nx < GW && ny < GH && x * x + y * y <= 10) explored[ny * GW + nx] = 1; }
         // the way out (the open gate moves on a schedule — see updateGates in maps.html) + jumpscares
         updateGates(dt, t); updateScares(dt);
-        if (!P.escaped && !P.freeze && gateOpen() && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) { if (LV === 0) libEnter(); else doEscape(); }   // garden gate -> the library (library.html) · library gate -> out
+        if (!P.escaped && !P.freeze && gateOpen() && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) libEnter();   // every gate -> the next level (see library.html)
         // network
         sendT += dt; if (sendT > .08) { sendT = 0; const r2 = (n) => +n.toFixed(2); net.set({ x: r2(P.x), y: r2(P.y), z: r2(P.z), ry: r2(P.yaw), rp: r2(P.pitch), f: P.flash ? +Math.max(0, Math.min(1, Torch.k)).toFixed(1) : 0 }); }
         // HUD
@@ -2373,7 +2373,7 @@
         };
         row(me.name, accHex(), P.escaped ? '✓ out' : 'you', true);
         for (const r of remotes.values()) { row(r.name, '#' + new THREE.Color(r.sk.accent).getHexString(), r.pr.e ? '✓ out' : Math.round(Math.hypot(r.x - P.x, r.z - P.z)) + ' m'); }
-        if (netOn) $('#room').textContent = `ROOM ${code} · ${remotes.size + 1} explorer${remotes.size ? 's' : ''}${LV ? ' · LIBRARY' : ''}`; else $('#room').textContent = LV ? 'SOLO · LIBRARY' : 'SOLO';
+        if (netOn) $('#room').textContent = `ROOM ${code} · ${remotes.size + 1} explorer${remotes.size ? 's' : ''}${world.lib ? ' · LIBRARY' : ''}${LV > 1 ? ' · LVL ' + (LV + 1) : ''}`; else $('#room').textContent = 'SOLO' + (world.lib ? ' · LIBRARY' : '') + (LV > 1 ? ' · LVL ' + (LV + 1) : '');
       }
       // [moved to maps.html]
 
