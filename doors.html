@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - Doors</title>
+</head>
+
+<body>
+  <!-- ALL ABOUT DOORS: which room entrances get a door (generation), the hinged door meshes, the E-key interaction + "E - Open door" prompt,
+       the sound, and the multiplayer sync. index.html loads this file at start-up and runs the script below as part of the game.
+       Used by the library and the castle: libGen / casGen call doorsGen, libBuild / casBuild call doorsBuild (and add a stone lintel over each door).
+       A CLOSED door is solid (tileV in index.html reads world.dm), an open one is not. Doors only open/close with E, one tile reach, no key needed.
+       Multiplayer: every door you toggle is published in your presence key "dr"; everyone merges them by timestamp, so the whole room sees the same doors. -->
+  <script>
+'use strict';
+// ---------- tuning ----------
+const DOOR = {
+  types: [2, 6],        // which room types get doors (2 = reading rooms / chambers, 6 = the exit halls). 5 = great halls stay open
+  chanceOpen: .3,       // chance a door starts the level open
+  reach: 3.6,           // how close you must be (world units; one tile is 3.2)
+  cone: .5,             // how directly you must face it (1 = dead centre, 0 = 90 degrees off)
+  speed: 1.7,           // swing speed (1 / seconds to fully open)
+  h: 3.4                // door height (the walls are 4.4 high; a stone lintel fills the rest)
+};
+const DR = { mine: new Map(), seen: new Map(), cur: null, el: null, scanT: 0, lastShown: '' };
+
+// ---------- generation (deterministic: call after the rooms are placed; uses the level's own rng) ----------
+// A room's entrances are the open tiles in the ring just outside it. Each one that sits between two solid tiles gets a door.
+function doorsGen(g, rooms, W, H, R) {
+  const I = (x, y) => y * W + x, list = [], used = new Set();
+  const solid = (x, y) => x < 0 || y < 0 || x >= W || y >= H || g[I(x, y)] === 1;
+  for (const r of rooms) {
+    if (DOOR.types.indexOf(r.type) < 0) continue;
+    const cand = [];
+    for (let x = r.x0; x < r.x0 + r.w; x++) { cand.push([x, r.y0 - 1, 0, -1]); cand.push([x, r.y0 + r.h, 0, 1]); }
+    for (let y = r.y0; y < r.y0 + r.h; y++) { cand.push([r.x0 - 1, y, -1, 0]); cand.push([r.x0 + r.w, y, 1, 0]); }
+    for (const [x, y, ox, oz] of cand) {
+      if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1 || g[I(x, y)] !== 0 || used.has(I(x, y))) continue;
+      if (!(ox ? (solid(x, y - 1) && solid(x, y + 1)) : (solid(x - 1, y) && solid(x + 1, y)))) continue;     // must fill the whole gap
+      used.add(I(x, y));
+      list.push({ id: list.length, tx: x, ty: y, ox, oz, flip: R() < .5 ? 1 : -1, open0: R() < DOOR.chanceOpen });
+    }
+  }
+  const dm = new Uint8Array(W * H);                       // 1 = a closed door stands on this tile
+  for (const d of list) if (!d.open0) dm[I(d.tx, d.ty)] = 1;
+  return { list, dm };
+}
+
+// ---------- meshes ----------
+function doorsBuild(root, world, style) {
+  const ds = world.doors; if (!ds || !ds.length) return;
+  const W = GW, PW = T - .2, DH = DOOR.h;
+  const wood = LitMat({ map: A.tex.wood, color: style.wood }), band = LitMat({ color: style.band });
+  const bx = (w, h, d, x, y, z) => new THREE.BoxGeometry(w, h, d).translate(x, y, z);
+  const gPanel = bx(PW, DH, .15, PW / 2, DH / 2, 0);
+  const gTrim = mergeGeos([
+    bx(PW, .16, .2, PW / 2, .6, 0), bx(PW, .16, .2, PW / 2, DH - .6, 0), bx(.4, .3, .22, .2, .6, 0), bx(.4, .3, .22, .2, DH - .6, 0),
+    new THREE.TorusGeometry(.11, .028, 6, 12).translate(PW - .35, 1.5, .13), new THREE.TorusGeometry(.11, .028, 6, 12).translate(PW - .35, 1.5, -.13), bx(.14, .14, .3, PW - .35, 1.62, 0)]);
+  world.doorObjs = ds.map((d) => {
+    const cx = (d.tx + .5) * T, cz = (d.ty + .5) * T;
+    const sx = d.ox ? 0 : d.flip, sz = d.ox ? d.flip : 0;                  // direction the closed panel spans from its hinge
+    const a0 = Math.atan2(-sz, sx); let da = Math.atan2(-d.oz, d.ox) - a0;  // closed angle, and the swing to lie along the outward direction (always +-90 degrees)
+    while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI;
+    const grp = new THREE.Group(); grp.position.set(cx - sx * PW / 2, 0, cz - sz * PW / 2);
+    grp.add(new THREE.Mesh(gPanel, wood)); grp.add(new THREE.Mesh(gTrim, band)); root.add(grp);
+    const o = { id: d.id, tx: d.tx, ty: d.ty, cx, cz, I: d.ty * W + d.tx, grp, a0, da, k: d.open0 ? 1 : 0, t: d.open0 ? 1 : 0, ts: 0 };
+    grp.rotation.y = a0 + da * o.k; return o;
+  });
+}
+
+// ---------- state ----------
+const doorInTile = (d, x, z, pad) => Math.abs(x - d.cx) < T / 2 + pad && Math.abs(z - d.cz) < T / 2 + pad;
+function doorSnd(d, open) {
+  const dist = Math.hypot(P.x - d.cx, P.z - d.cz), v = Math.max(0, 1 - dist / 26); if (v < .03) return;
+  Aud.burst(open ? 1500 : 900, .05, .05 * v, 3);                                                         // latch
+  Aud.tone(open ? 92 : 135, open ? 165 : 78, .5, .05 * v, 'sawtooth');                                   // hinge creak
+  if (!open) setTimeout(() => Aud.burst(150, .22, .15 * v, .8), 380);                                    // the thud when it shuts
+}
+function doorPublish() {
+  const e = []; for (const [id, v] of DR.mine) e.push(id + ',' + v[0] + ',' + v[1].toString(36));
+  net.set({ dr: LV + ';' + e.join(';') });
+}
+// open or close a door. mine = true when you did it (published to the others)
+function doorSet(d, open, mine) {
+  if (!open && mine) {
+    if (doorInTile(d, P.x, P.z, .45) || [...remotes.values()].some(r => doorInTile(d, r.x, r.z, .45))) { toast('Something is in the way.'); return false; }
+  }
+  d.t = open ? 1 : 0; world.dm[d.I] = open ? 0 : 1; d.ts = Date.now(); doorSnd(d, open);
+  if (mine) { DR.mine.set(d.id, [d.t, d.ts]); doorPublish(); }
+  return true;
+}
+function doorsReset() { DR.mine.clear(); DR.seen.clear(); DR.cur = null; if (netOn) net.set({ dr: LV + ';' }); }
+
+// the door you are looking at, if any
+function doorTarget() {
+  const ds = world && world.doorObjs; if (!ds || P.down > 0 || P.freeze || paused) return null;
+  const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw); let best = null, bs = 0;
+  for (const d of ds) {
+    const dx = d.cx - P.x, dz = d.cz - P.z, dist = Math.hypot(dx, dz); if (dist > DOOR.reach) continue;
+    const dot = dist < .6 ? 1 : (dx * fx + dz * fz) / dist; if (dot < DOOR.cone) continue;
+    const s = dot * 2 - dist * .3; if (!best || s > bs) { best = d; bs = s; }
+  }
+  return best;
+}
+// called from the E key: returns true if a door took the keypress (otherwise E is the beacon perk as before)
+function doorInteract() {
+  const d = doorTarget(); if (!d) return false;
+  doorSet(d, d.t === 0, true); return true;
+}
+
+// ---------- per frame ----------
+function updateDoors(dt) {
+  const ds = world && world.doorObjs;
+  if (!ds) { if (DR.el) DR.el.style.opacity = 0; return; }
+  // swing
+  for (const d of ds) {
+    if (d.k !== d.t) d.k += Math.max(-dt * DOOR.speed, Math.min(dt * DOOR.speed, d.t - d.k));
+    const near = Math.abs(P.x - d.cx) < 48 && Math.abs(P.z - d.cz) < 48; d.grp.visible = near;
+    if (near) { const e = d.k * d.k * (3 - 2 * d.k); d.grp.rotation.y = d.a0 + d.da * e; }
+  }
+  // the Mimic opens doors in its way
+  if (typeof Mim !== 'undefined' && Mim.st && Mim.st !== 'idle') for (const d of ds) if (d.t === 0 && Math.hypot(Mim.x - d.cx, Mim.z - d.cz) < 3.4) doorSet(d, true, false);
+  // other players' doors (merged by timestamp)
+  DR.scanT -= dt;
+  if (DR.scanT <= 0 && net.r) {
+    DR.scanT = .25;
+    for (const p of net.r.peers()) {
+      if (p.isMe) continue; const s = p.presence && p.presence.dr; if (typeof s !== 'string' || DR.seen.get(p.peer) === s) continue;
+      DR.seen.set(p.peer, s); const parts = s.split(';'); if ((+parts[0] | 0) !== LV) continue;
+      for (let i = 1; i < parts.length; i++) {
+        const [id, st, tt] = parts[i].split(','), d = ds[+id | 0], ts = parseInt(tt, 36); if (!d || !(ts > d.ts)) continue;
+        d.t = +st ? 1 : 0; world.dm[d.I] = d.t ? 0 : 1; d.ts = ts; doorSnd(d, !!d.t);
+      }
+    }
+  }
+  // the prompt
+  if (!DR.el) {
+    const e = DR.el = document.createElement('div');
+    e.style.cssText = 'position:fixed;left:50%;bottom:27%;transform:translateX(-50%);z-index:20;pointer-events:none;opacity:0;transition:opacity .15s;padding:7px 16px;border-radius:8px;background:rgba(0,0,0,.5);color:#e8efe6;font:600 14px Inter,sans-serif;letter-spacing:.14em;text-transform:uppercase;text-shadow:0 1px 4px #000';
+    document.body.appendChild(e);
+  }
+  const tg = doorTarget(); DR.cur = tg;
+  if (tg) { const txt = '[E]  ' + (tg.t ? 'Close door' : 'Open door'); if (txt !== DR.lastShown) { DR.el.textContent = txt; DR.lastShown = txt; } }
+  DR.el.style.opacity = tg ? 1 : 0;
+}
+  </script>
+</body>
+
+</html>

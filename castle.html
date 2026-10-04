@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - the Castle</title>
+</head>
+
+<body>
+  <!-- ALL ABOUT LEVEL 3, THE CASTLE: the generator, the builder, its textures. Same size as the library (75 x 55 tiles).
+       index.html loads this file at start-up and runs the script below as part of the game. library.html owns the level switch
+       (libEnter) and calls casGen / casBuild from here. Like every level it has SEVERAL exit chambers (world.sites) and the open
+       gate hops between them on the shared schedule (see buildGates / updateGates in maps.html). -->
+  <script>
+'use strict';
+// ---------- tuning ----------
+const CAS = {
+  W: 75, H: 55,            // same size as the library. Keep both odd.
+  rooms: 15,               // barracks / store rooms between the corridors
+  loops: .10,              // chance a wall is knocked through (higher = fewer dead ends)
+  galleries: 3,            // long straight stone galleries cut through the maze
+  maxDist: 38,             // nothing further than this is drawn (fog anyway)
+  fog: .05, fogNight: .034, fogColor: 0x07090d, hemi: .27,
+  mm: 3                    // minimap pixels per tile
+};
+const CG = {};             // castle geometries (A.cas holds the materials)
+
+// ---------- generation (deterministic from the room code) ----------
+function casGen(R) {
+  const W = CAS.W, H = CAS.H; GW = W; GH = H;
+  const g = new Uint8Array(W * H).fill(1);          // 0 open · 1 solid
+  const tt = new Uint8Array(W * H);                 // 0 corridor · 1 gatehouse · 2 chamber · 5 great hall · 6 exit chamber   (never 3/4: those count as "outdoors")
+  const kd = new Uint8Array(W * H);                 // what a solid tile is: 0 wall · 1 pillar · 2 banquet table · 3 throne
+  const I = (x, y) => y * W + x, carve = (x, y) => { g[I(x, y)] = 0; };
+  const cy = (H - 1) >> 1;
+  // the gatehouse (where you arrive) on the west edge, with a short passage out of it
+  const FX0 = 1, FY0 = cy - 3, FW = 7;
+  for (let y = FY0; y < FY0 + FW; y++)for (let x = FX0; x < FX0 + FW; x++) { carve(x, y); tt[I(x, y)] = 1; }
+  for (let x = FX0 + FW; x <= 10; x++)carve(x, cy);
+  // the corridors: a long winding maze of stone
+  const X0 = 11, vis = new Set([I(X0, cy)]), st = [[X0, cy]]; carve(X0, cy);
+  while (st.length) {
+    const [cx, cyy] = st[st.length - 1], nb = [];
+    for (const [dx, dy] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) { const nx = cx + dx, ny = cyy + dy; if (nx >= X0 && nx <= W - 2 && ny >= 1 && ny <= H - 2 && !vis.has(I(nx, ny))) nb.push([nx, ny, dx, dy]); }
+    if (!nb.length) { st.pop(); continue; }
+    const [nx, ny, dx, dy] = nb[(R() * nb.length) | 0];
+    carve(cx + dx / 2, cyy + dy / 2); carve(nx, ny); vis.add(I(nx, ny)); st.push([nx, ny]);
+  }
+  for (let y = 1; y < H - 1; y++)for (let x = X0 + 1; x < W - 1; x++) {
+    if (g[I(x, y)] !== 1 || R() >= CAS.loops) continue;
+    if (x % 2 === 0 && y % 2 === 1) { if (g[I(x - 1, y)] === 0 && g[I(x + 1, y)] === 0) carve(x, y); }
+    else if (x % 2 === 1 && y % 2 === 0) { if (g[I(x, y - 1)] === 0 && g[I(x, y + 1)] === 0) carve(x, y); }
+  }
+  // long galleries: whole rows (odd y) opened up, so there are a few straight lines of torches to run down
+  for (let n = 0; n < CAS.galleries; n++) { const y = 3 + 2 * Math.floor(R() * ((H - 6) / 2)); for (let x = X0; x <= W - 2; x++) carve(x, y); }
+  // rooms (always odd-sized and odd-aligned, so they merge cleanly with the maze and can never cut it in two)
+  const rooms = [];
+  const fits = (x0, y0, w, h) => {
+    if (x0 < 13 || y0 < 1 || x0 + w - 1 > W - 2 || y0 + h - 1 > H - 2) return false;
+    for (const r of rooms) if (x0 < r.x0 + r.w + 2 && x0 + w + 2 > r.x0 && y0 < r.y0 + r.h + 2 && y0 + h + 2 > r.y0) return false;
+    return true;
+  };
+  const place = (x0, y0, w, h, type) => {
+    rooms.push({ x0, y0, w, h, type });
+    for (let y = y0; y < y0 + h; y++)for (let x = x0; x < x0 + w; x++) { carve(x, y); tt[I(x, y)] = type; kd[I(x, y)] = 0; }
+    if (type === 6) return;
+    for (let oy = 1; oy < h - 1; oy += 2)for (let ox = 1; ox < w - 1; ox += 2) {
+      const x = x0 + ox, y = y0 + oy;
+      if (type === 2 && R() < .45) { g[I(x, y)] = 1; kd[I(x, y)] = 2; }                                   // banquet tables / long benches
+      else if (type === 5 && R() < .85 && (Math.abs(ox - (w - 1) / 2) > 1 || Math.abs(oy - (h - 1) / 2) > 1)) { g[I(x, y)] = 1; kd[I(x, y)] = 1; }   // pillars
+    }
+  };
+  // the ways out: several exit chambers (the first one always at the far east end). Only ONE gate is open at a time and it hops between them.
+  const sites = [], nxE = Math.floor((W - 2 - 8 - 13) / 2) + 1, nyE = Math.floor((H - 2 - 8 - 1) / 2) + 1;
+  for (let n = 0, sep = 24; n < EXIT_SITES; n++) {
+    let got = null;
+    for (let k = 0; k < 600 && !got; k++) {
+      const x0 = n === 0 ? W - 10 : 13 + 2 * Math.floor(R() * nxE), y0 = 1 + 2 * Math.floor(R() * nyE);
+      if (fits(x0, y0, 9, 9) && sites.every(s => Math.hypot(s.tx - (x0 + 4), s.ty - (y0 + 4)) >= sep)) got = [x0, y0];
+      else if (k % 100 === 99 && sep > 12) sep -= 4;           // cramped? relax the spacing a little
+    }
+    if (!got) break;
+    const [ex0, ey0] = got; place(ex0, ey0, 9, 9, 6);
+    for (const [px, py] of [[1, 1], [7, 1], [1, 7], [7, 7]]) { g[I(ex0 + px, ey0 + py)] = 1; kd[I(ex0 + px, ey0 + py)] = 1; }
+    sites.push({ tx: ex0 + 4, ty: ey0 + 4, x: (ex0 + 4.5) * T, z: (ey0 + 4.5) * T });
+  }
+  // two great halls (the first has a throne in the middle), then the chambers
+  let atria = 0, throne = null;
+  for (let k = 0; k < 80 && atria < 2; k++) {
+    const w = 13, h = 11, nx = Math.floor((W - 1 - w - 13) / 2) + 1, ny = Math.floor((H - 1 - h - 1) / 2) + 1;
+    const x0 = 13 + 2 * Math.floor(R() * nx), y0 = 1 + 2 * Math.floor(R() * ny);
+    if (fits(x0, y0, w, h)) {
+      place(x0, y0, w, h, 5); atria++;
+      if (atria === 1) { const tx = x0 + 6, ty = y0 + 5; g[I(tx, ty)] = 1; kd[I(tx, ty)] = 3; throne = { tx, ty, x: (tx + .5) * T, z: (ty + .5) * T }; }
+    }
+  }
+  const sizes = [5, 7, 7, 9];
+  for (let n = 0; n < CAS.rooms; n++) {
+    const w = sizes[(R() * sizes.length) | 0], h = sizes[(R() * sizes.length) | 0];
+    for (let k = 0; k < 60; k++) {
+      const nx = Math.floor((W - 1 - w - 13) / 2) + 1, ny = Math.floor((H - 1 - h - 1) / 2) + 1;
+      const x0 = 13 + 2 * Math.floor(R() * nx), y0 = 1 + 2 * Math.floor(R() * ny);
+      if (fits(x0, y0, w, h)) { place(x0, y0, w, h, 2); break; }
+    }
+  }
+  const dd = doorsGen(g, rooms, W, H, R);          // doors on the chambers and exit halls (see doors.html)
+  return {
+    g, tt, kd, rooms, R, sites, exit: sites[0], lib: true, castle: true, cy, throne, doors: dd.list, dm: dd.dm,
+    spawn: { x0: 2 * T, x1: 5.6 * T, z0: (cy + .6) * T, z1: (cy + 3.4) * T },
+    maxDist: CAS.maxDist, fogD: CAS.fog, fogN: CAS.fogNight, fogColor: CAS.fogColor, hemi: CAS.hemi, hemiCol: 0x56628a, hemiGnd: 0x0d0f16, mmS: CAS.mm
+  };
+}
+
+// ---------- textures ----------
+function casPaintStone(x, S, v) {
+  const rows = 6, rh = S / rows;
+  x.fillStyle = '#0b0c0f'; x.fillRect(0, 0, S, S);
+  for (let r = 0; r < rows; r++) {
+    let px = -(r % 2) * S * .12 - TR() * S * .05;
+    while (px < S) {
+      const w = S * (.2 + TR() * .16);
+      x.fillStyle = `hsl(${205 + TR() * 20},${5 + TR() * 8}%,${15 + TR() * 11}%)`; x.fillRect(px + 3, r * rh + 3, w - 6, rh - 6);
+      x.fillStyle = 'rgba(255,255,255,.05)'; x.fillRect(px + 3, r * rh + 3, w - 6, 3);
+      x.fillStyle = 'rgba(0,0,0,.28)'; x.fillRect(px + 3, r * rh + rh - 7, w - 6, 4);
+      for (let k = 0; k < 3; k++)blob(x, S, px + TR() * w, r * rh + TR() * rh, 6 + TR() * 16, 'rgba(0,0,0,A)', .08 + TR() * .12);
+      px += w;
+    }
+  }
+  if (v === 1) for (let i = 0; i < 26; i++)blob(x, S, TR() * S, TR() * S, 14 + TR() * 38, 'rgba(56,92,48,A)', .16 + TR() * .2);                    // damp moss
+  if (v === 2) { for (let i = 0; i < 4; i++)crack(x, S, 'rgba(0,0,0,0.6)'); for (let i = 0; i < 14; i++)blob(x, S, TR() * S, TR() * S * .5, 10 + TR() * 30, 'rgba(80,40,30,A)', .12); }   // cracks and rust stains
+  for (let i = 0; i < 20; i++)blob(x, S, TR() * S, TR() * S, 20 + TR() * 50, 'rgba(0,0,0,A)', .14);
+  grain(x, S, S, 12);
+}
+function casPaintFlag(x, S) {
+  x.fillStyle = '#07080a'; x.fillRect(0, 0, S, S);
+  const n = 3, sz = S / n;
+  for (let r = 0; r < n; r++)for (let c = 0; c < n; c++) {
+    x.fillStyle = `hsl(${208 + TR() * 14},${5 + TR() * 7}%,${11 + TR() * 9}%)`; x.fillRect(c * sz + 3, r * sz + 3, sz - 6, sz - 6);
+    x.fillStyle = 'rgba(255,255,255,.035)'; x.fillRect(c * sz + 3, r * sz + 3, sz - 6, 2);
+  }
+  for (let i = 0; i < 40; i++)blob(x, S, TR() * S, TR() * S, 14 + TR() * 40, 'rgba(0,0,0,A)', .12 + TR() * .14);
+  for (let i = 0; i < 10; i++)blob(x, S, TR() * S, TR() * S, 10 + TR() * 24, 'rgba(50,84,64,A)', .1);
+  for (let i = 0; i < 3; i++)crack(x, S, 'rgba(0,0,0,0.5)');
+  grain(x, S, S, 12);
+}
+function casPaintVault(x, S) {
+  x.fillStyle = '#090a0d'; x.fillRect(0, 0, S, S);
+  const n = 2, sz = S / n;
+  for (let r = 0; r < n; r++)for (let c = 0; c < n; c++) {
+    x.fillStyle = `hsl(${212 + TR() * 8},${6 + TR() * 6}%,${8 + TR() * 5}%)`; x.fillRect(c * sz + 12, r * sz + 12, sz - 24, sz - 24);
+    x.fillStyle = 'rgba(255,255,255,.03)'; x.fillRect(c * sz + 12, r * sz + 12, sz - 24, 3);
+  }
+  x.fillStyle = '#1b130d'; x.fillRect(0, 0, S, 11); x.fillRect(0, S / 2 - 6, S, 12); x.fillRect(0, 0, 11, S); x.fillRect(S / 2 - 6, 0, 12, S);        // dark timber beams
+  for (let i = 0; i < 50; i++)blob(x, S, TR() * S, TR() * S, 20 + TR() * 50, 'rgba(0,0,0,A)', .18 + TR() * .2);
+  grain(x, S, S, 12);
+}
+function casPaintRug(x, S) {
+  x.fillStyle = '#3d0b11'; x.fillRect(0, 0, S, S);
+  x.fillStyle = 'rgba(190,150,70,.75)'; const b = S / 14; x.fillRect(0, 0, S, b * .55); x.fillRect(0, S - b * .55, S, b * .55); x.fillRect(0, b * 1.1, S, b * .2); x.fillRect(0, S - b * 1.3, S, b * .2);
+  x.fillStyle = 'rgba(190,150,70,.5)'; const q = S / 4;
+  for (let m = 0; m < 4; m++) { x.save(); x.translate(m * q + q / 2, S / 2); x.rotate(Math.PI / 4); x.fillRect(-S / 26, -S / 26, S / 13, S / 13); x.restore(); }
+  for (let i = 0; i < 30; i++)blob(x, S, TR() * S, TR() * S, 18 + TR() * 40, 'rgba(0,0,0,A)', .2);
+  grain(x, S, S, 16);
+}
+function casPaintBanner(x, w, h, col, trim) {
+  x.clearRect(0, 0, w, h);
+  x.fillStyle = col; x.beginPath(); x.moveTo(6, 0); x.lineTo(w - 6, 0); x.lineTo(w - 6, h - 34); x.lineTo(w / 2, h - 6); x.lineTo(6, h - 34); x.closePath(); x.fill();
+  x.strokeStyle = trim; x.lineWidth = 5; x.stroke();
+  x.fillStyle = trim; x.save(); x.translate(w / 2, h * .4); x.rotate(Math.PI / 4); x.fillRect(-26, -26, 52, 52); x.restore();
+  x.fillStyle = col; x.save(); x.translate(w / 2, h * .4); x.rotate(Math.PI / 4); x.fillRect(-17, -17, 34, 34); x.restore();
+  x.fillStyle = trim; x.beginPath(); x.arc(w / 2, h * .4, 8, 0, 7); x.fill();
+  x.fillStyle = '#2a1a0f'; x.fillRect(0, 0, w, 9);
+  for (let i = 0; i < 14; i++) { x.fillStyle = 'rgba(0,0,0,.2)'; x.fillRect(TR() * w, TR() * h * .9, 2, 14 + TR() * 40); }
+  x.globalCompositeOperation = 'destination-out'; for (let i = 0; i < 5; i++) { x.beginPath(); x.arc(TR() * w, h * .5 + TR() * h * .5, 3 + TR() * 7, 0, 7); x.fill(); } x.globalCompositeOperation = 'source-over';
+}
+
+function casAssets(Q) {
+  if (A.cas) return;
+  const S = Q.tex, t = {};
+  t.stoneA = mk(S, S, (x, s) => casPaintStone(x, s, 0)); t.stoneB = mk(S, S, (x, s) => casPaintStone(x, s, 1)); t.stoneC = mk(S, S, (x, s) => casPaintStone(x, s, 2));
+  t.floor = mk(S, S, casPaintFlag); t.ceil = mk(S / 2, S / 2, casPaintVault); t.rug = mk(S / 2, S / 2, casPaintRug);
+  t.banA = mk(128, 256, (x, w, h) => casPaintBanner(x, w, h, '#5e1218', '#d2a94a'), { repeat: false });
+  t.banB = mk(128, 256, (x, w, h) => casPaintBanner(x, w, h, '#17305e', '#cfd6e6'), { repeat: false });
+  t.banC = mk(128, 256, (x, w, h) => casPaintBanner(x, w, h, '#141a17', '#6dd6a8'), { repeat: false });
+  t.web = mk(128, 128, libPaintWeb, { repeat: false });
+  t.floor.repeat.set(CAS.W, CAS.H); t.ceil.repeat.set(CAS.W, CAS.H);      // one big plane each: two draw calls for the whole level
+  const ban = (m) => LitMat({ map: m, alphaTest: .35, side: THREE.DoubleSide });
+  A.cas = {
+    tex: t, stoneA: LitMat({ map: t.stoneA }), stoneB: LitMat({ map: t.stoneB }), stoneC: LitMat({ map: t.stoneC }), edge: LitMat({ map: t.stoneA, color: 0x8a8a96 }),
+    floor: LitMat({ map: t.floor }), ceil: LitMat({ map: t.ceil }), rug: LitMat({ map: t.rug }), column: LitMat({ map: t.stoneA, color: 0xc8c8d4 }),
+    banA: ban(t.banA), banB: ban(t.banB), banC: ban(t.banC), web: LitMat({ map: t.web, alphaTest: .35, side: THREE.DoubleSide }),
+    iron: LitMat({ color: 0x1d1e23 }), steel: LitMat({ color: 0x70747e }), dark: LitMat({ color: 0x2a1c13 }), candle: LitMat({ color: 0xe8dcc0 }),
+    slit: new THREE.MeshBasicMaterial({ color: 0x4a62a8 })
+  };
+  const bx = (w, h, d, x, y, z) => new THREE.BoxGeometry(w, h, d).translate(x, y, z);
+  const cyl = (rt, rb, h, seg, y) => new THREE.CylinderGeometry(rt, rb, h, seg).translate(0, y, 0);
+  CG.pillar = mergeGeos([cyl(.62, .7, WH, 10, WH / 2), cyl(.98, .98, .35, 10, .175), cyl(.88, .88, .32, 10, WH - .16)]);
+  CG.table = mergeGeos([bx(2.9, .12, 1.4, 0, .95, 0), bx(.2, .95, .2, 1.25, .475, .5), bx(.2, .95, .2, -1.25, .475, .5), bx(.2, .95, .2, 1.25, .475, -.5), bx(.2, .95, .2, -1.25, .475, -.5), bx(2.6, .08, .36, 0, .5, 1.0), bx(2.6, .08, .36, 0, .5, -1.0)]);
+  CG.barrel = mergeGeos([cyl(.44, .44, .9, 10, .45), cyl(.47, .47, .06, 10, .2), cyl(.47, .47, .06, 10, .7)]);
+  CG.crate = mergeGeos([bx(.9, .9, .9, 0, .45, 0), bx(.95, .08, .95, 0, .15, 0), bx(.95, .08, .95, 0, .75, 0)]);
+  CG.armor = mergeGeos([bx(.16, .75, .16, -.12, .37, 0), bx(.16, .75, .16, .12, .37, 0), cyl(.27, .2, .62, 8, 1.06), new THREE.SphereGeometry(.15, 8, 6).translate(-.3, 1.3, 0), new THREE.SphereGeometry(.15, 8, 6).translate(.3, 1.3, 0),
+    new THREE.SphereGeometry(.17, 10, 8).translate(0, 1.55, 0), new THREE.ConeGeometry(.04, .22, 5).translate(0, 1.82, 0), bx(.1, .55, .1, -.33, .95, 0), bx(.1, .55, .1, .33, .95, 0),
+    cyl(.02, .02, 2.5, 4, 1.25).translate(.42, 0, .05), new THREE.ConeGeometry(.05, .22, 6).translate(.42, 2.6, .05)]);
+  CG.sconce = mergeGeos([cyl(.025, .025, .55, 5, 2.05), cyl(.09, .05, .16, 8, 2.38), new THREE.TorusGeometry(.08, .015, 4, 8).rotateX(Math.PI / 2).translate(0, 2.2, 0)]);
+  CG.candle = cyl(.045, .05, .26, 8, .13);
+  CG.chain = mergeGeos([cyl(.018, .018, 2.2, 4, WH - 1.1), new THREE.TorusGeometry(.2, .02, 5, 10).rotateX(Math.PI / 2).translate(0, WH - 2.2, 0), bx(.1, .1, .1, 0, WH - .05, 0)]);
+  CG.chand = mergeGeos([new THREE.TorusGeometry(1.35, .06, 6, 18).rotateX(Math.PI / 2), bx(2.7, .05, .05, 0, 0, 0), bx(.05, .05, 2.7, 0, 0, 0), cyl(.025, .025, WH - 3.3, 4, (WH - 3.3) / 2)]);
+  CG.brazier = mergeGeos([cyl(.5, .3, .3, 12, .95), bx(.06, .8, .06, .28, .4, 0), bx(.06, .8, .06, -.14, .4, .24), bx(.06, .8, .06, -.14, .4, -.24), cyl(.05, .05, .5, 6, .25)]);
+  CG.throne = mergeGeos([bx(6.2, .18, 6.2, 0, .09, 0), bx(1.2, .5, 1.1, 0, .55, 0), bx(1.2, 2.5, .24, 0, 1.55, -.5), bx(.2, .5, 1.1, -.7, .85, 0), bx(.2, .5, 1.1, .7, .85, 0), new THREE.ConeGeometry(.13, .4, 6).translate(-.52, 3.0, -.5), new THREE.ConeGeometry(.13, .4, 6).translate(.52, 3.0, -.5)]);
+}
+
+// ---------- the gatehouse: where you wake up ----------
+function casFoyer(root, world, glowL) {
+  const cy = world.cy, C = A.cas;
+  const box = (w, h, d, x, y, z, m, ry = 0) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.rotation.y = ry; root.add(b); return b; };
+  const flameAt = (x, y, z, s) => { const f = new THREE.Sprite(new THREE.SpriteMaterial({ map: A.tex.glow, color: 0xffa24a, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: .95 })); f.scale.set(s, s, 1); f.position.set(x, y, z); root.add(f); };
+  const dx = 8 * T + .15, dzz = (cy + .5) * T;
+  // the raised portcullis over the passage out
+  box(.5, 3.5, .5, dx, 1.75, dzz - T / 2 + .1, C.edge); box(.5, 3.5, .5, dx, 1.75, dzz + T / 2 - .1, C.edge); box(.6, .55, T + .1, dx, 3.7, dzz, C.edge);
+  for (let i = -3; i <= 3; i++) { box(.05, .6, .05, dx - .1, 3.2, dzz + i * .38, C.iron); const tip = new THREE.Mesh(new THREE.ConeGeometry(.045, .18, 5).rotateX(Math.PI), C.iron); tip.position.set(dx - .1, 2.82, dzz + i * .38); root.add(tip); }
+  box(.05, .05, 2.6, dx - .1, 3.3, dzz, C.iron);
+  // sign
+  const c = document.createElement('canvas'); c.width = 512; c.height = 96; const x = c.getContext('2d');
+  x.font = '600 44px Cinzel, Georgia, serif'; x.textAlign = 'center'; x.fillStyle = 'rgba(210,180,120,0.95)'; x.shadowColor = '#000'; x.shadowBlur = 8; x.fillText('THE KEEP REMEMBERS', 256, 62);
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false })); sign.scale.set(3.2, .6, 1); sign.position.set(dx - .5, 4.0, dzz); root.add(sign);
+  // a brazier in the middle (the one warm, safe-looking thing in the castle)
+  const bxp = 4.2 * T, bz = (cy - 1.3) * T;
+  const br = new THREE.Mesh(CG.brazier, C.iron); br.position.set(bxp, 0, bz); root.add(br); flameAt(bxp, 1.5, bz, 1.7);
+  glowL.push([bxp, 1.35, bz, 1, .62, .25]);
+  LIGHTS.push({ id: 'brazier', x: bxp, y: 1.7, z: bz, col: 0xff9440, int: 3.4, d: 26, fl: .28, ph: 1.3, w: 3 });
+  // two torches on the wall either side of the portcullis
+  for (const tz of [(cy - .5) * T, (cy + 1.5) * T]) {
+    const m = new THREE.Mesh(CG.sconce, C.iron); m.position.set(8 * T - .12, 0, tz); root.add(m); flameAt(8 * T - .12, 2.6, tz, 1.0); glowL.push([8 * T - .12, 2.55, tz, 1, .62, .25]);
+    LIGHTS.push({ x: 8 * T - .4, y: 2.6, z: tz, col: 0xff9440, int: 2.0, d: 12, fl: .3, ph: tz, w: 1.5 });
+  }
+  // a big banner on the west wall, a guards' table with a candle, barrels and crates
+  const bn = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 3.9), C.banA); bn.position.set(T + .08, 2.3, dzz); bn.rotation.y = Math.PI / 2; root.add(bn);
+  const tb = new THREE.Mesh(CG.table, A.wood); tb.position.set(3.3 * T, 0, (cy - 2.4) * T); tb.rotation.y = .25; root.add(tb);
+  const cd = new THREE.Mesh(CG.candle, C.candle); cd.position.set(3.3 * T + .3, .95, (cy - 2.4) * T + .1); root.add(cd); flameAt(3.3 * T + .3, 1.3, (cy - 2.4) * T + .1, .4);
+  LIGHTS.push({ x: 3.3 * T + .3, y: 1.5, z: (cy - 2.4) * T + .1, col: 0xffb45a, int: 1.4, d: 8, fl: .3, ph: 4, w: 1.2 });
+  for (const [px, pz] of [[2 * T, (cy + 2.6) * T], [2 * T + .8, (cy + 2.75) * T], [6.3 * T, (cy + 3) * T]]) { const b = new THREE.Mesh(CG.barrel, A.wood); b.position.set(px, 0, pz); root.add(b); }
+  box(.9, .9, .9, 6.3 * T, .45, (cy - 2.6) * T, A.wood, .3); box(.8, .8, .8, 6.3 * T + .1, 1.3, (cy - 2.6) * T, A.wood, 1.0);
+}
+
+// ---------- build ----------
+function casBuild(world, Q) {
+  const { g, tt, kd, rooms } = world, R = world.R, W = GW, H = GH, cyF = world.cy;
+  const root = new THREE.Group(); scene.add(root); world.root = root;
+  const I = (x, y) => y * W + x, TC = (t) => (t + .5) * T;
+  casAssets(Q);
+  const L = {}; for (const k of ['stoneA', 'stoneB', 'stoneC', 'edge', 'rug', 'pillar', 'table', 'barrel', 'crate', 'armor', 'sconce', 'flame', 'candle', 'banA', 'banB', 'banC', 'web', 'slit', 'chain', 'chand', 'brazier', 'throne']) L[k] = new IL();
+  L.rug.cs = 24;
+  const glowL = [], glowS = [], dust = [];
+  const cnt = (x) => Math.floor(x * Q.dens + R());
+  const jit = (l, h, s) => { const v = l + R() * (h - l); return new THREE.Color(v, v * (1 + (R() - .5) * s), v * (1 - (R() - .5) * s)); };
+  const FLAME = new THREE.Color(0xff9a3c), WHITE = new THREE.Color(0xffffff), DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const isOpen = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 0;
+  const isWall = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 1 && kd[I(x, y)] === 0;
+  const torch = (lx, lz, th) => {
+    L.sconce.add(lx, 0, lz, th); L.flame.add(lx, 2.52, lz, 0, .7, 1.5, .7, FLAME); glowL.push([lx, 2.55, lz, 1, .6, .24]);
+    LIGHTS.push({ x: lx, y: 2.5, z: lz, col: 0xff9440, int: 2.2, d: 11, fl: .3, ph: R() * 10, w: 1 });
+  };
+  const candle = (x, y, z, lit) => {
+    L.candle.add(x, y, z, 0); L.flame.add(x, y + .31, z, 0, .55, 1.1, .55, FLAME); glowL.push([x, y + .33, z, 1, .66, .29]);
+    if (lit) LIGHTS.push({ x, y: y + .5, z, col: 0xffb45a, int: 1.4, d: 8, fl: .3, ph: R() * 10, w: 1.2 });
+  };
+  const rugT = new Set();
+  for (const r of rooms) if (r.type === 5) for (let x = r.x0; x < r.x0 + r.w; x++)rugT.add(I(x, r.y0 + (r.h - 1) / 2));
+  const bans = ['banA', 'banB', 'banC'];
+  for (let ty = 0; ty < H; ty++)for (let tx = 0; tx < W; tx++) {
+    const v = g[I(tx, ty)], k = kd[I(tx, ty)], cx = TC(tx), cz = TC(ty), tp = tt[I(tx, ty)];
+    if (v === 1 && k === 0) {          // a stone wall: only if someone could see it
+      let ex = false;
+      for (let a = -1; a <= 1 && !ex; a++)for (let b = -1; b <= 1; b++) if (isOpen(tx + a, ty + b)) { ex = true; break; }
+      if (!ex) continue;
+      const edge = tx === 0 || ty === 0 || tx === W - 1 || ty === H - 1 || (tx <= 10 && Math.abs(ty - cyF) <= 4), r = R();
+      (edge ? L.edge : r < .5 ? L.stoneA : r < .82 ? L.stoneB : L.stoneC).add(cx, WH / 2, cz, 0, 1, 1, 1, jit(.75, 1, .05));
+      continue;
+    }
+    if (v === 1 && k === 1) L.pillar.add(cx, 0, cz, R() * 6.28, 1, 1, 1, jit(.8, 1, .04));
+    if (v === 1 && k === 2) {          // a banquet table with candles
+      L.table.add(cx, 0, cz, (R() < .5 ? 0 : Math.PI / 2) + (R() - .5) * .2, 1, 1, 1, jit(.7, 1, .08));
+      if (R() < .8) candle(cx + (R() - .5) * 1.8, 1.01, cz + (R() - .5) * .8, R() < .5);
+    }
+    if (v === 1 && k === 3) L.throne.add(cx, 0, cz, -Math.PI / 2);      // faces the way you came in
+    if (v === 1) continue;
+    // open floor
+    const inRoom = tp === 2 || tp === 5 || tp === 6, foyerRug = tp === 1 && tx >= 2 && tx <= 6 && ty === cyF;
+    if (rugT.has(I(tx, ty)) || foyerRug) L.rug.add(cx, .02, cz, 0, 1, 1, 1, jit(.8, 1, .05));
+    for (let n = cnt(inRoom ? .8 : .25); n > 0; n--)dust.push(cx + (R() - .5) * T, .5 + R() * 3, cz + (R() - .5) * T);
+    if (inRoom && tp !== 6 && R() < .04) L.chain.add(cx + (R() - .5) * 1.4, 0, cz + (R() - .5) * 1.4, R() * 6.28);
+    for (const [dx, dy] of DIRS) {
+      if (!isWall(tx + dx, ty + dy)) continue;
+      const th = Math.atan2(-dx, -dy), tX = Math.cos(th), tZ = -Math.sin(th), bx = cx + dx * (T / 2 - .03), bz = cz + dy * (T / 2 - .03);
+      if (R() < .07) { const u = (R() - .5) * (T - .7), s = 1.1 + R(); L.web.add(bx + tX * u - dx * .05, WH - s / 2 - .04, bz + tZ * u - dy * .05, th + (R() < .5 ? Math.PI : 0), s, s, s); }
+      if (R() < (tp === 1 ? .1 : tp === 5 ? .09 : .04)) { const u = (R() - .5) * (T - 1.4); L[bans[(R() * 3) | 0]].add(bx + tX * u - dx * .07, 2.9, bz + tZ * u - dy * .07, th, 1.1, 2.5, 1); }
+      if (tp !== 1 && R() < .022) { const u = (R() - .5) * (T - 1); L.slit.add(bx + tX * u - dx * .04, 2.5, bz + tZ * u - dy * .04, th, .16, 1.3, 1); glowS.push([bx + tX * u - dx * .12, 2.5, bz + tZ * u - dy * .12, .3, .4, .75]); }   // an arrow slit with a sliver of moonlight
+      if (tp !== 1 && R() < (tp === 5 ? .05 : .014)) { const u = (R() - .5) * (T - 1.2); L.armor.add(bx + tX * u - dx * .45, 0, bz + tZ * u - dy * .45, th, 1, 1, 1, WHITE); }       // a suit of armour, facing the room
+      if (tp === 2 && R() < .08) { const u = (R() - .5) * (T - 1.4), o = (R() < .5 ? L.barrel : L.crate); o.add(bx + tX * u - dx * .6, 0, bz + tZ * u - dy * .6, R() * 6.28, 1, 1, 1, jit(.7, 1, .08)); }
+      const tr = tp === 1 ? 0 : inRoom ? .08 : .045;
+      if (R() < tr) torch(bx - dx * .12, bz - dy * .12, th);
+    }
+  }
+  // chandeliers and braziers in the great halls, the throne, and a cold light over each exit chamber
+  let first = true;
+  for (const r of rooms) {
+    const mx = TC(r.x0 + (r.w - 1) / 2), mz = TC(r.y0 + (r.h - 1) / 2);
+    if (r.type === 5) {
+      for (const off of [-4, 0, 4]) {
+        const cx = mx + off * T;
+        L.chand.add(cx, 3.3, mz, 0);
+        for (let i = 0; i < 8; i++) { const a = i / 8 * 6.283; L.flame.add(cx + Math.cos(a) * 1.35, 3.45, mz + Math.sin(a) * 1.35, 0, .6, 1.2, .6, FLAME); glowL.push([cx + Math.cos(a) * 1.35, 3.48, mz + Math.sin(a) * 1.35, 1, .62, .26]); }
+        LIGHTS.push({ x: cx, y: 3.1, z: mz, col: 0xffb070, int: 2.6, d: 20, fl: .12, ph: R() * 10, w: 2 });
+      }
+      if (first) {
+        first = false;
+        for (const o of [-2, 2]) { const bz = mz + o * T; L.brazier.add(mx, 0, bz); L.flame.add(mx, 1.28, bz, 0, 1.4, 3, 1.4, FLAME); glowL.push([mx, 1.4, bz, 1, .55, .2]); LIGHTS.push({ x: mx, y: 1.6, z: bz, col: 0xff8a3a, int: 2.6, d: 16, fl: .3, ph: R() * 10, w: 2 }); }
+      }
+    }
+  }
+  for (const d of world.doors) L.edge.add(TC(d.tx), WH - .5, TC(d.ty), 0, 1, 1 / WH, 1, jit(.8, 1, .04));       // stone lintel over every door
+  const mk2 = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
+  const C = A.cas;
+  mk2('stoneA', G.wall, C.stoneA); mk2('stoneB', G.wall, C.stoneB); mk2('stoneC', G.wall, C.stoneC); mk2('edge', G.wall, C.edge);
+  mk2('rug', G.floor, C.rug); mk2('pillar', CG.pillar, C.column); mk2('table', CG.table, A.wood); mk2('barrel', CG.barrel, A.wood); mk2('crate', CG.crate, A.wood);
+  mk2('armor', CG.armor, C.steel); mk2('sconce', CG.sconce, C.iron); mk2('flame', G.bloom, A.flower); mk2('candle', CG.candle, C.candle);
+  mk2('banA', G.quad, C.banA); mk2('banB', G.quad, C.banB); mk2('banC', G.quad, C.banC); mk2('web', G.quad, C.web); mk2('slit', G.quad, C.slit);
+  mk2('chain', CG.chain, C.iron); mk2('chand', CG.chand, C.iron); mk2('brazier', CG.brazier, C.iron); mk2('throne', CG.throne, C.dark);
+  // one floor and one ceiling for the whole level
+  const fl = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(-Math.PI / 2), C.floor); fl.position.set(W * T / 2, 0, H * T / 2); root.add(fl);
+  const ce = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(Math.PI / 2), C.ceil); ce.position.set(W * T / 2, WH, H * T / 2); root.add(ce);
+  fl.matrixAutoUpdate = ce.matrixAutoUpdate = false; fl.updateMatrix(); ce.updateMatrix();
+  casFoyer(root, world, glowL);
+  doorsBuild(root, world, { wood: 0x5a4636, band: 0x24262c });
+  buildGates(root, world);                  // one gate per exit chamber; only one is open at a time (see updateGates)
+  world.scares = findScareSpots(world);
+  if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
+  if (glowL.length) root.add(glowPoints(glowL, Q.glow * 1.8, A.tex.glow));
+  if (dust.length) { const dp = libDust(dust, R, 'vec3(.7,.8,1.)'); root.add(dp); world.fireMat = dp.material; }
+  return world;
+}
+  </script>
+</body>
+
+</html>
