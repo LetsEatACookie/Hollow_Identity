@@ -99,7 +99,7 @@ function libGen(R) {
       if (fits(x0, y0, w, h)) { place(x0, y0, w, h, 2); break; }
     }
   }
-  const dd = doorsGen(g, tt, kd, rooms, W, H, R, cy);   // extra closed-off rooms, each with its own door (see doors.html)
+  const dd = doorsGen(g, tt, kd, rooms, W, H, R, { sx: 11, sy: cy, minX: 13, count: DOOR.rooms, obst: [1, 2] });   // extra closed-off rooms, each with its own door (see doors.html)
   return {
     g, tt, kd, rooms, R, sites, exit: sites[0], lib: true, cy, doors: dd.list, dm: dd.dm,
     spawn: { x0: 2 * T, x1: 5.6 * T, z0: (cy + .6) * T, z1: (cy + 3.4) * T },

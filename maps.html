@@ -78,7 +78,8 @@ function genWorld(R) {
       if (ok) { place(x0, y0, w, h, R() < .45 ? 3 : 2); break; }
     }
   }
-  return { g, tt, rooms, R, sites, exit: sites[0] };
+  const dd = doorsGen(g, tt, new Uint8Array(GW * GH), rooms, GW, GH, R, { sx: 9, sy: 15, minX: 11, count: DOOR.gardenRooms, obst: [2, 0] });   // closed-off rooms with a door (see doors.html); hedges inside
+  return { g, tt, rooms, R, sites, exit: sites[0], doors: dd.list, dm: dd.dm };
 }
 
 function glowPoints(list, size, tex) {
@@ -185,14 +186,16 @@ function buildWorld(world, Q) {
     const cx = (r.x0 + r.w / 2) * T, cz = (r.y0 + r.h / 2) * T;
     LIGHTS.push({ x: cx, y: 6.5, z: cz, col: r.type === 4 ? 0x7dffc8 : 0x7da4ff, int: 1.55, d: r.w > 5 || r.h > 5 ? 25 : 21, fl: 0, ph: 0, w: 1.3 });
   }
+  for (const d of world.doors || []) L.wall.add(TC(d.tx), WH - .5, TC(d.ty), 0, 1, 1 / WH, 1, jit(.72, 1, .06));      // lintel over every door-room door
   const mkI = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
   mkI('wall', G.wall, A.wall); mkI('hedge', G.hedge, A.hedge); mkI('fStone', G.floor, A.floorStone); mkI('fGrass', G.floor, A.floorGrass); mkI('fMoss', G.floor, A.floorMoss); mkI('ceil', G.ceil, A.ceil);
   mkI('ivy', G.quad, A.ivy); mkI('vine', G.vine, A.vine); mkI('tuft', G.tuft, A.tuft); mkI('fern', G.fern, A.fern); mkI('leafy', G.leafy, A.leafy);
   mkI('bush', G.bush, A.bush); mkI('stem', G.stem, A.stem); mkI('bloom', G.bloom, A.flower); mkI('mcap', G.mcap, A.mcap); mkI('mstem', G.mstem, A.mstem);
   mkI('trunk', G.trunk, A.trunk); mkI('canopy', G.canopy, A.canopy); mkI('lantB', G.lantB, A.lantB); mkI('lantC', G.lantC, A.lantC);
 
-  // ---- special places: start room + exit gate
+  // ---- special places: start room + exit gate + the door rooms
   buildStartRoom(root, glowL, glowS);
+  doorsBuild(root, world, { wood: 0x5a4a36, band: 0x2a3a2a });
   buildGates(root, world);
   world.scares = findScareSpots(world);
   if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
