@@ -1948,7 +1948,7 @@
         const T0 = Torch;
         if (paused) T0.shaking = false;
         // a fault gives no warning: the beam just starts to fade, dimmer and dimmer, until it is black
-        if (!T0.fault && !paused && !P.escaped) { T0.next -= dt; if (T0.next <= 0) { T0.fault = true; T0.dead = false; T0.ft = 0; T0.prog = 0; } }
+        if (!T0.fault && !paused && !P.escaped) { T0.next -= dt; if (T0.next <= 0) { T0.fault = true; T0.dead = false; T0.ft = 0; T0.prog = 0; $('#shakeTxt').innerHTML = isTouch ? 'Your flashlight is failing — hold <b>🫨</b> to shake it' : 'Your flashlight is failing — hold <b>right mouse</b> to shake it'; } }
         let fixed = false;
         if (T0.fault) {
           T0.ft += dt;
@@ -1971,8 +1971,8 @@
           T0.rattle -= dt; if (T0.rattle <= 0) { T0.rattle = .11; Aud.burst(1700 + Math.random() * 600, .05, .07, 2.5); }
           T0.sx = (Math.random() - .5) * .07; T0.sy = (Math.random() - .5) * .07;
         } else { T0.sx *= .6; T0.sy *= .6; }
-        $('#shakeUI').classList.toggle('hide', !T0.dead); if (T0.dead) $('#shakeBar').style.width = (T0.prog / TORCH.needDead * 100).toFixed(0) + '%';
-        if (isTouch) $('#bShake').classList.toggle('hide', !T0.dead);
+        $('#shakeUI').classList.toggle('hide', !T0.fault); if (T0.fault) $('#shakeBar').style.width = (T0.prog / (T0.dead ? TORCH.needDead : TORCH.need) * 100).toFixed(0) + '%';
+        if (isTouch) $('#bShake').classList.toggle('hide', !T0.fault);
       }
       let hemi, spot, fill, torchGroup, torchLens, pool = [], poolTimer = 0, petals = null, explored = null;
       const net = { r: null, kind: 'none', set(p) { if (this.r) this.r.presence(p).catch(() => { }); } };
@@ -2305,7 +2305,7 @@
         P.flickT -= dt; if (P.flickT <= 0 && Math.random() < .004) P.flickT = .18;
         const fk = (P.flickT > 0 ? (.15 + Math.random() * .9) : 1) * Torch.k;
         spot.visible = P.flash; spot.intensity = 2.4 * (lant ? 1.5 : 1) * (me.q === 'nightblind' ? .55 : 1) * fk; spot.angle = lant ? .64 : .5; spot.distance = (lant ? 54 : 40) * (.4 + .6 * Torch.k);
-        fill.intensity = (.18 + .22 * (P.flash ? Torch.k : 0)) + (has('warmsoul') ? .9 : 0);
+        fill.intensity = (.18 + .22 * (P.flash ? Torch.k : 0) + (Torch.fault ? .3 * (1 - Torch.k) : 0)) + (has('warmsoul') ? .9 : 0);
         { const kk = P.flash ? Torch.k : 0; torchLens.material.color.setRGB(.27 + .73 * kk, .27 + .69 * kk, .27 + .58 * kk); } torchGroup.position.set(.25 + Torch.sx, -.22 + Torch.sy, -.45); torchGroup.rotation.z = Torch.sx * 4;
         // night eyes
         if (P.night) { P.energy -= 9 * dt; if (P.energy <= 0) { P.energy = 0; P.night = false; $('#nv').classList.remove('on'); toast('Night Eyes exhausted'); } }

@@ -384,6 +384,7 @@ async function libEnter() {
   Aud.shift(); libFade(true, 'LEVEL ' + (n + 1), lib ? 'The Library' : 'The Garden');
   await wait(1100);
   libTeardown(); LV = n;
+  Torch.fault = false; Torch.dead = false; Torch.ft = 0; Torch.prog = 0; Torch.k = 1; Torch.next = TORCH.first;   // fresh flashlight on every new level
   if (lib) world = libBuild(libGen(mulberry32(hashStr(code + '|library' + (n > 1 ? '|' + n : '')))), Q);
   else { GW = 41; GH = 31; world = buildWorld(genWorld(mulberry32(hashStr(code + '|garden|' + n))), Q); }
   const w = world;
