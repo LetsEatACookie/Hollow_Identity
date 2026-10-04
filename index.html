@@ -1503,14 +1503,14 @@
     // Loads characters.html + maps.html + entity.html before the game starts. Needs http(s): GitHub Pages, Netlify, VS Code Live Server... (not a double-clicked file://)
     (function () {
       try {
-        ['characters.html', 'maps.html', 'entity.html'].forEach(function (f) {
+        ['characters.html', 'maps.html', 'entity.html', 'library.html'].forEach(function (f) {
           var x = new XMLHttpRequest(); x.open('GET', f, false); x.send();
           if (x.status >= 400 || !x.responseText) throw new Error(f + ' not found');
           var el = new DOMParser().parseFromString(x.responseText, 'text/html').querySelector('script');
           var s = document.createElement('script'); s.textContent = el.textContent + '\n//# sourceURL=' + f; document.head.appendChild(s);
         });
       } catch (e) {
-        document.body.insertAdjacentHTML('beforeend', '<div class="loaderr"><b>Couldn\u2019t load characters.html / maps.html / entity.html.</b><br>Open the game through a web server (Live Server, GitHub Pages, Netlify) and keep all four files in the same folder.</div>');
+        document.body.insertAdjacentHTML('beforeend', '<div class="loaderr"><b>Couldn\u2019t load characters.html / maps.html / entity.html / library.html.</b><br>Open the game through a web server (Live Server, GitHub Pages, Netlify) and keep all four files in the same folder.</div>');
         throw e;
       }
     })();
@@ -1694,11 +1694,11 @@
       function starGeo(w, h, n) { const parts = []; for (let i = 0; i < n; i++) { const g = new THREE.PlaneGeometry(w, h); g.translate(0, h / 2, 0); g.rotateY(i * Math.PI / n); parts.push(g); } return mergeGeos(parts); }
 
       class IL { // instance list
-        constructor() { this.a = []; this.hasC = false; }
+        constructor() { this.a = []; this.hasC = false; this.cat = ''; this.cs = 0; }
         add(x, y, z, ry = 0, sx = 1, sy = sx, sz = sx, col = null, rx = 0, rz = 0) { this.a.push([x, y, z, ry, sx, sy, sz, col, rx, rz]); if (col) this.hasC = true; }
         build(geo, mat, parent) {
           if (!this.a.length) return null;
-          const groups = new Map(), CS = 16;
+          const groups = new Map(), CS = this.cs || 16;
           for (const e of this.a) { const k = Math.floor(e[0] / CS) + ',' + Math.floor(e[2] / CS); let g = groups.get(k); if (!g) groups.set(k, g = []); g.push(e); }
           geo.computeBoundingSphere(); const gr = geo.boundingSphere.radius + geo.boundingSphere.center.length();
           const d = new THREE.Object3D(); d.rotation.order = 'YXZ'; const c = new THREE.Color(); let last = null;
@@ -1709,8 +1709,8 @@
               if (this.hasC) { c.set(e[7] || 0xffffff); m.setColorAt(i, c); }
               x0 = Math.min(x0, e[0]); x1 = Math.max(x1, e[0]); y0 = Math.min(y0, e[1]); y1 = Math.max(y1, e[1]); z0 = Math.min(z0, e[2]); z1 = Math.max(z1, e[2]); ms = Math.max(ms, e[4], e[5], e[6]);
             });
-            m.instanceMatrix.needsUpdate = true; m.frustumCulled = false; parent.add(m);
-            CHUNKS.push({ m, sph: new THREE.Sphere(new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 2 + gr * ms + 1.5) }); last = m;
+            m.instanceMatrix.needsUpdate = true; m.frustumCulled = false; parent.add(m); m.matrixAutoUpdate = false; m.updateMatrix();
+            CHUNKS.push({ m, cat: this.cat, sph: new THREE.Sphere(new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 2 + gr * ms + 1.5) }); last = m;
           }
           return last;
         }
@@ -1802,7 +1802,7 @@
           g.gain.setValueAtTime(Math.max(.0002, vol), c.currentTime); g.gain.exponentialRampToValueAtTime(.0001, c.currentTime + dur);
           s.connect(f); f.connect(g); g.connect(this.m); s.start(c.currentTime, Math.random() * 1.5, dur + .05);
         },
-        step(v, type) { this.burst(type === 'grass' ? 1500 : type === 'moss' ? 800 : 560, .11, .2 * v, type === 'grass' ? .6 : 1.4); },
+        step(v, type) { this.burst(type === 'grass' ? 1500 : type === 'moss' ? 800 : type === 'wood' ? 420 : 560, .11, .2 * v, type === 'grass' ? .6 : 1.4); },
         update() {
           if (!this.ctx) return; const n = this.ctx.currentTime;
           if (n > this.nextDrip) { this.tone(1300 + Math.random() * 600, 420, .22, .05); this.nextDrip = n + 3 + Math.random() * 9; }
@@ -1918,7 +1918,8 @@
         $('#down').classList.remove('hide'); toast('You collapsed…');
       }
       function startSpot() {
-        let sx, sz, n = 0; do { sx = 8 + Math.random() * 7; sz = 46.5 + Math.random() * 5; n++; } while (n < 25 && [...remotes.values()].some(r => Math.hypot(r.x - sx, r.z - sz) < 1.3));
+        const sa = world.spawn || { x0: 8, x1: 15, z0: 46.5, z1: 51.5 };
+        let sx, sz, n = 0; do { sx = sa.x0 + Math.random() * (sa.x1 - sa.x0); sz = sa.z0 + Math.random() * (sa.z1 - sa.z0); n++; } while (n < 25 && [...remotes.values()].some(r => Math.hypot(r.x - sx, r.z - sz) < 1.3));
         return { x: sx, z: sz };
       }
       function wakeUp() {
@@ -2143,15 +2144,16 @@
         remotes.set(peer.peer, r); toast(r.name + ' entered the dark'); return r;
       }
       function updateRemotes(dt, t) {
-        const seen = new Set();
+        const seen = new Set(), alive = new Set();
         if (net.r) {
           for (const p of net.r.peers()) {
             if (p.isMe) continue; const pr = p.presence;
             if (!pr || pr.c !== code || typeof pr.x !== 'number' || typeof pr.z !== 'number' || pr.n === undefined) continue;
+            alive.add(p.peer); if ((pr.lv | 0) !== LV) continue;      // teammates on another level are not here
             seen.add(p.peer); let r = remotes.get(p.peer); if (!r) r = createRemote(p); r.pr = pr;
           }
         }
-        for (const [id, r] of remotes) { if (!seen.has(id)) { scene.remove(r.av); DYN.delete(r.light); remotes.delete(id); mimicForget(id); toast(r.name + ' left'); } }
+        for (const [id, r] of remotes) { if (!seen.has(id)) { scene.remove(r.av); DYN.delete(r.light); remotes.delete(id); if (!alive.has(id)) { mimicForget(id); toast(r.name + ' left'); } else if (((r.pr.lv | 0) > LV)) toast(r.name + ' went through the gate'); } }
         for (const r of remotes.values()) {
           const pr = r.pr, k = 1 - Math.exp(-12 * dt); let dx = pr.x - r.x, dz = pr.z - r.z;
           if (Math.hypot(dx, dz) > 9) { r.x = pr.x; r.z = pr.z; dx = dz = 0; }
@@ -2265,7 +2267,7 @@
         let mx = 0, mz = 0;
         if (keys.has('KeyW') || keys.has('ArrowUp')) mz += 1; if (keys.has('KeyS') || keys.has('ArrowDown')) mz -= 1;
         if (keys.has('KeyA') || keys.has('ArrowLeft')) mx -= 1; if (keys.has('KeyD') || keys.has('ArrowRight')) mx += 1;
-        mx += joy.x; mz -= joy.y; if (P.down > 0) mx = mz = 0; const len = Math.hypot(mx, mz); if (len > 1) { mx /= len; mz /= len; }
+        mx += joy.x; mz -= joy.y; if (P.down > 0 || P.freeze) mx = mz = 0; const len = Math.hypot(mx, mz); if (len > 1) { mx /= len; mz /= len; }
         const maxStam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1);
         if (lockFailed && !document.pointerLockElement && !isTouch) {
           const nx = mX / innerWidth * 2 - 1, ny = mY / innerHeight * 2 - 1, k = CFG.sens / 100;
@@ -2290,7 +2292,7 @@
         if (!outdoor && P.y > WH - 1.9) { P.y = WH - 1.9; P.vy = Math.min(P.vy, 0); }
         if (P.y <= gh) { P.y = gh; P.vy = 0; P.grounded = true; } else if (P.y > gh + .02) P.grounded = false;
         // steps + bob
-        if (P.grounded && moved > 0) { P.stepAcc += moved; P.bob += moved * 2.6; if (P.stepAcc > (sprinting ? 2.3 : 1.8)) { P.stepAcc = 0; Aud.step((sprinting ? 1 : .6) * (me.q === 'loud' ? 1.6 : 1), tp === 3 || tp === 4 ? 'grass' : tp === 2 ? 'moss' : 'stone'); } }
+        if (P.grounded && moved > 0) { P.stepAcc += moved; P.bob += moved * 2.6; if (P.stepAcc > (sprinting ? 2.3 : 1.8)) { P.stepAcc = 0; Aud.step((sprinting ? 1 : .6) * (me.q === 'loud' ? 1.6 : 1), LV ? 'wood' : tp === 3 || tp === 4 ? 'grass' : tp === 2 ? 'moss' : 'stone'); } }
         else P.bob += 0;
         // camera
         const bobY = P.grounded ? Math.sin(P.bob) * .035 * Math.min(1, P.speed / 3) : 0;
@@ -2308,8 +2310,8 @@
         // night eyes
         if (P.night) { P.energy -= 9 * dt; if (P.energy <= 0) { P.energy = 0; P.night = false; $('#nv').classList.remove('on'); toast('Night Eyes exhausted'); } }
         else P.energy = Math.min(100, P.energy + 5 * dt);
-        hemi.intensity = lerp(hemi.intensity, P.night ? 1.05 : .3, 1 - Math.exp(-4 * dt));
-        scene.fog.density = lerp(scene.fog.density, P.night ? .027 : .04, 1 - Math.exp(-3 * dt));
+        hemi.intensity = lerp(hemi.intensity, P.night ? 1.05 : (world.hemi || .3), 1 - Math.exp(-4 * dt));
+        scene.fog.density = lerp(scene.fog.density, P.night ? (world.fogN || .027) : (world.fogD || .04), 1 - Math.exp(-3 * dt));
         Aud.garden(outdoor ? 1 : 0); Aud.update();
         P.pingCd = Math.max(0, P.pingCd - dt); P.flareCd = Math.max(0, P.flareCd - dt);
         // my own petal trail
@@ -2319,7 +2321,7 @@
         for (let y = -3; y <= 3; y++)for (let x = -3; x <= 3; x++) { const nx = ptx + x, ny = pty + y; if (nx >= 0 && ny >= 0 && nx < GW && ny < GH && x * x + y * y <= 10) explored[ny * GW + nx] = 1; }
         // the way out (the open gate moves on a schedule — see updateGates in maps.html) + jumpscares
         updateGates(dt, t); updateScares(dt);
-        if (!P.escaped && gateOpen() && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) doEscape();
+        if (!P.escaped && !P.freeze && gateOpen() && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) { if (LV === 0) libEnter(); else doEscape(); }   // garden gate -> the library (library.html) · library gate -> out
         // network
         sendT += dt; if (sendT > .08) { sendT = 0; const r2 = (n) => +n.toFixed(2); net.set({ x: r2(P.x), y: r2(P.y), z: r2(P.z), ry: r2(P.yaw), rp: r2(P.pitch), f: P.flash ? +Math.max(0, Math.min(1, Torch.k)).toFixed(1) : 0 }); }
         // HUD
@@ -2371,7 +2373,7 @@
         };
         row(me.name, accHex(), P.escaped ? '✓ out' : 'you', true);
         for (const r of remotes.values()) { row(r.name, '#' + new THREE.Color(r.sk.accent).getHexString(), r.pr.e ? '✓ out' : Math.round(Math.hypot(r.x - P.x, r.z - P.z)) + ' m'); }
-        if (netOn) $('#room').textContent = `ROOM ${code} · ${remotes.size + 1} explorer${remotes.size ? 's' : ''}`;
+        if (netOn) $('#room').textContent = `ROOM ${code} · ${remotes.size + 1} explorer${remotes.size ? 's' : ''}${LV ? ' · LIBRARY' : ''}`; else $('#room').textContent = LV ? 'SOLO · LIBRARY' : 'SOLO';
       }
       // [moved to maps.html]
 
@@ -2403,7 +2405,7 @@
       }
       function enterGame() {
         Aud.init(); Aud.resume();
-        started = true; if (previewAv) previewAv.visible = false; camera.clearViewOffset(); torchGroup.visible = true;
+        started = true; startT = tNow; if (previewAv) previewAv.visible = false; camera.clearViewOffset(); torchGroup.visible = true;
         const sp0 = startSpot(); P.hp = HEALTH.max; P.hpT = 0; P.down = 0; P.dnK = 0;
         P.x = sp0.x; P.z = sp0.z; P.yaw = Math.PI / 4; P.pitch = 0; P.y = 0; P.stam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1); P.flares = has('flares') ? 5 : 0; P.energy = 100;
         $('#reveal').classList.add('hide'); buildHud();
@@ -2737,19 +2739,26 @@
       function applyRes() { renderer.setPixelRatio(curPR()); if (world && world.fireMat) world.fireMat.uniforms.uPS.value = .1 * renderer.domElement.height; }
       function applyLights() { pool.forEach((p, i) => { const on = i < CFG.lights; if (!on) { p.cand = null; p.rel = false; p.l.intensity = 0; } p.l.visible = on; }); }
       function applyAll() { camera.fov = CFG.fov; camera.updateProjectionMatrix(); applyRes(); applyLights(); if (Aud.m) Aud.m.gain.value = CFG.vol / 100; $('#grain').style.display = CFG.grain ? '' : 'none'; if (!CFG.fps) $('#fps').classList.add('hide'); }
+      // ---- per-frame culling. Chunks (see IL.build) are hidden when they are behind you or too far away.
+      // Small detail is dropped sooner than walls: by then it is mostly fog anyway. Levels can cap the distance too (world.maxDist).
+      const LOD_CAPS = { tuft: 24, fern: 24, bush: 22, stem: 20, bloom: 20, mcap: 18, mstem: 18, ivy: 32, vine: 30, leafy: 28, lantB: 34, lantC: 34, web: 22, ladder: 28, candle: 24, flame: 24, book: 20, chand: 34 };
       function cullChunks() {
-        camera.updateMatrixWorld(); pvm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse); frustum.setFromProjectionMatrix(pvm);
-        const cp = camera.position, D = CFG.dist;
-        for (const c of CHUNKS) { c.m.visible = cp.distanceTo(c.sph.center) - c.sph.radius < D && frustum.intersectsSphere(c.sph); }
+        camera.updateMatrixWorld(); camera.matrixWorldInverse.copy(camera.matrixWorld).invert();     // this frame's view, not last frame's (stops edge flicker when turning)
+        pvm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse); frustum.setFromProjectionMatrix(pvm);
+        const cp = camera.position, D = Math.min(CFG.dist, world.maxDist || 1e9), nf = P.night ? 1.35 : 1;
+        for (const c of CHUNKS) { const cap = LOD_CAPS[c.cat] ? Math.min(D, LOD_CAPS[c.cat] * nf) : D; c.m.visible = cp.distanceTo(c.sph.center) - c.sph.radius < cap && frustum.intersectsSphere(c.sph); }
       }
+      // ---- automatic resolution: drops quickly when the frame rate sags, creeps back up slowly (and not for 20 s after a drop, so it doesn't bounce)
+      let startT = 0, noRaise = 0; const AK_MIN = .45;
       function perfTick(r) {
-        fpsAcc += r; fpsN++; if (fpsAcc < .8) return;
+        fpsAcc += r; fpsN++; if (fpsAcc < .7) return;
         const fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
-        if (CFG.fps) { const el = $('#fps'); el.classList.remove('hide'); el.textContent = Math.round(fps) + ' FPS'; }
-        if (!started || paused || !CFG.auto) return;
-        adaptT -= .8; if (adaptT > 0) return;
-        if (fps < 54) { upN = 0; if (autoK > .4) { autoK = Math.max(.4, autoK - (fps < 38 ? .15 : .08)); adaptT = 1.6; applyRes(); } }
-        else if (fps > 58 && autoK < 1) { if (++upN >= 4) { upN = 0; autoK = Math.min(1, autoK + .05); applyRes(); } }
+        if (CFG.fps) { const el = $('#fps'); el.classList.remove('hide'); el.textContent = Math.round(fps) + ' FPS · ' + Math.round(curPR() * 100) + '%'; }
+        if (!started || paused || !CFG.auto || lvBusy) return;
+        if (tNow < startT + 4) return;                         // ignore the first seconds of a level: shader compiles and texture uploads
+        if (fps < 52) { upN = 0; if (autoK > AK_MIN && tNow > adaptT) { autoK = Math.max(AK_MIN, autoK - (fps < 35 ? .15 : fps < 45 ? .1 : .05)); adaptT = tNow + 1.3; noRaise = tNow + 20; applyRes(); } }
+        else if (fps > 57 && autoK < 1 && tNow > noRaise) { if (++upN >= 5) { upN = 0; autoK = Math.min(1, autoK + .05); applyRes(); } }
+        else upN = 0;
       }
       const SETS = [['sRes', 'res', 'change'], ['sDist', 'dist', 'input'], ['sLights', 'lights', 'change'], ['sFov', 'fov', 'input'], ['sSens', 'sens', 'input'], ['sVol', 'vol', 'input']], CHK = [['sAuto', 'auto'], ['sInv', 'inv'], ['sFps', 'fps'], ['sGrain', 'grain'], ['sScare', 'scares'], ['sMimic', 'mimic'], ['sMimicVoice', 'mimicVoice']], UN = { res: '%', dist: ' m', lights: '', fov: '°', sens: '%', vol: '%' };
       function syncUI() { for (const [id, k] of SETS) { const el = $('#' + id); el.value = CFG[k]; el.nextElementSibling.textContent = CFG[k] + UN[k]; } for (const [id, k] of CHK) $('#' + id).checked = !!CFG[k]; }

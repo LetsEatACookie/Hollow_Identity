@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - the Library</title>
+</head>
+
+<body>
+  <!-- ALL ABOUT LEVEL 2, THE LIBRARY: the generator, the builder, its textures and the walk-through-the-gate level switch.
+       index.html loads this file at start-up and runs the script below as part of the game.
+       You reach it by walking through the open gate in the garden. Everyone in a room gets the same library (seeded from the room code),
+       but players move between levels on their own: you only see teammates who are on the same level as you (presence key "lv"). -->
+  <script>
+'use strict';
+// ---------- tuning ----------
+const LIB = {
+  W: 91, H: 67,            // map size in tiles (the garden is 41 x 31, so this is ~4.8x the area)
+  rooms: 24,               // reading rooms scattered between the aisles
+  loops: .10,              // chance a wall between two aisles is knocked through (higher = fewer dead ends)
+  maxDist: 40,             // nothing further than this is drawn: it is all fog anyway, and it keeps the frame rate up
+  fog: .052, fogNight: .034, fogColor: 0x0b0806, hemi: .26,
+  mm: 3                    // minimap pixels per tile
+};
+let LV = 0, lvBusy = false;    // current level: 0 = garden, 1 = library
+const LG = {};                 // library geometries (A.lib holds the materials)
+
+// ---------- generation (deterministic from the room code) ----------
+function libGen(R) {
+  const W = LIB.W, H = LIB.H; GW = W; GH = H;
+  const g = new Uint8Array(W * H).fill(1);          // 0 open · 1 solid
+  const tt = new Uint8Array(W * H);                 // 0 aisle · 1 foyer · 2 reading room · 5 atrium · 6 exit hall
+  const kd = new Uint8Array(W * H);                 // what a solid tile is: 0 bookcase · 1 pillar · 2 table
+  const I = (x, y) => y * W + x, carve = (x, y) => { g[I(x, y)] = 0; };
+  const cy = (H - 1) >> 1;
+  // the foyer (where you arrive) on the west edge, with a short corridor out of it
+  const FX0 = 1, FY0 = cy - 3, FW = 7;
+  for (let y = FY0; y < FY0 + FW; y++)for (let x = FX0; x < FX0 + FW; x++) { carve(x, y); tt[I(x, y)] = 1; }
+  for (let x = FX0 + FW; x <= 10; x++)carve(x, cy);
+  // the stacks: a long winding maze of bookcases
+  const X0 = 11, vis = new Set([I(X0, cy)]), st = [[X0, cy]]; carve(X0, cy);
+  while (st.length) {
+    const [cx, cyy] = st[st.length - 1], nb = [];
+    for (const [dx, dy] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) { const nx = cx + dx, ny = cyy + dy; if (nx >= X0 && nx <= W - 2 && ny >= 1 && ny <= H - 2 && !vis.has(I(nx, ny))) nb.push([nx, ny, dx, dy]); }
+    if (!nb.length) { st.pop(); continue; }
+    const [nx, ny, dx, dy] = nb[(R() * nb.length) | 0];
+    carve(cx + dx / 2, cyy + dy / 2); carve(nx, ny); vis.add(I(nx, ny)); st.push([nx, ny]);
+  }
+  for (let y = 1; y < H - 1; y++)for (let x = X0 + 1; x < W - 1; x++) {
+    if (g[I(x, y)] !== 1 || R() >= LIB.loops) continue;
+    if (x % 2 === 0 && y % 2 === 1) { if (g[I(x - 1, y)] === 0 && g[I(x + 1, y)] === 0) carve(x, y); }
+    else if (x % 2 === 1 && y % 2 === 0) { if (g[I(x, y - 1)] === 0 && g[I(x, y + 1)] === 0) carve(x, y); }
+  }
+  // rooms (always odd-sized and odd-aligned, so they merge cleanly with the maze and can never cut it in two)
+  const rooms = [];
+  const fits = (x0, y0, w, h) => {
+    if (x0 < 13 || y0 < 1 || x0 + w - 1 > W - 2 || y0 + h - 1 > H - 2) return false;
+    for (const r of rooms) if (x0 < r.x0 + r.w + 2 && x0 + w + 2 > r.x0 && y0 < r.y0 + r.h + 2 && y0 + h + 2 > r.y0) return false;
+    return true;
+  };
+  const place = (x0, y0, w, h, type) => {
+    rooms.push({ x0, y0, w, h, type });
+    for (let y = y0; y < y0 + h; y++)for (let x = x0; x < x0 + w; x++) { carve(x, y); tt[I(x, y)] = type; kd[I(x, y)] = 0; }
+    if (type === 6) return;
+    for (let oy = 1; oy < h - 1; oy += 2)for (let ox = 1; ox < w - 1; ox += 2) {
+      const x = x0 + ox, y = y0 + oy;
+      if (type === 2 && R() < .5) { g[I(x, y)] = 1; kd[I(x, y)] = 2; }                                   // reading tables
+      else if (type === 5 && R() < .85 && (Math.abs(ox - (w - 1) / 2) > 1 || Math.abs(oy - (h - 1) / 2) > 1)) { g[I(x, y)] = 1; kd[I(x, y)] = 1; }   // pillars
+    }
+  };
+  // the way out: a hall at the far east end
+  const ex0 = W - 10, ey0 = 1 + 2 * Math.floor(R() * ((H - 10 - 1) / 2 + 1));
+  place(ex0, ey0, 9, 9, 6);
+  for (const [px, py] of [[1, 1], [7, 1], [1, 7], [7, 7]]) { g[I(ex0 + px, ey0 + py)] = 1; kd[I(ex0 + px, ey0 + py)] = 1; }
+  const site = { tx: ex0 + 4, ty: ey0 + 4, x: (ex0 + 4.5) * T, z: (ey0 + 4.5) * T };
+  // two great halls, then the reading rooms
+  let atria = 0;
+  for (let k = 0; k < 80 && atria < 2; k++) {
+    const w = 13, h = 11, nx = Math.floor((W - 1 - w - 13) / 2) + 1, ny = Math.floor((H - 1 - h - 1) / 2) + 1;
+    const x0 = 13 + 2 * Math.floor(R() * nx), y0 = 1 + 2 * Math.floor(R() * ny);
+    if (fits(x0, y0, w, h)) { place(x0, y0, w, h, 5); atria++; }
+  }
+  const sizes = [5, 7, 7, 9];
+  for (let n = 0; n < LIB.rooms; n++) {
+    const w = sizes[(R() * sizes.length) | 0], h = sizes[(R() * sizes.length) | 0];
+    for (let k = 0; k < 60; k++) {
+      const nx = Math.floor((W - 1 - w - 13) / 2) + 1, ny = Math.floor((H - 1 - h - 1) / 2) + 1;
+      const x0 = 13 + 2 * Math.floor(R() * nx), y0 = 1 + 2 * Math.floor(R() * ny);
+      if (fits(x0, y0, w, h)) { place(x0, y0, w, h, 2); break; }
+    }
+  }
+  return {
+    g, tt, kd, rooms, R, sites: [site], exit: site, lib: true, cy,
+    spawn: { x0: 2 * T, x1: 5.6 * T, z0: (cy + .6) * T, z1: (cy + 3.4) * T },
+    maxDist: LIB.maxDist, fogD: LIB.fog, fogN: LIB.fogNight, fogColor: LIB.fogColor, hemi: LIB.hemi, mmS: LIB.mm
+  };
+}
+
+// ---------- textures + materials (made the first time you enter, so the garden never pays for them) ----------
+function libPaintShelf(x, S, v) {
+  const k = S / 512, rows = 7, rh = S / rows;
+  x.fillStyle = '#1a110b'; x.fillRect(0, 0, S, S);
+  const col = () => {
+    const r = TR(); let h, s, l;
+    if (r < .26) { h = 2 + TR() * 12; s = 38 + TR() * 20; l = 15 + TR() * 15; }
+    else if (r < .55) { h = 22 + TR() * 12; s = 30 + TR() * 25; l = 14 + TR() * 16; }
+    else if (r < .72) { h = 95 + TR() * 55; s = 18 + TR() * 20; l = 12 + TR() * 14; }
+    else if (r < .84) { h = 205 + TR() * 25; s = 22 + TR() * 20; l = 14 + TR() * 14; }
+    else if (r < .93) { h = 38 + TR() * 12; s = 40 + TR() * 20; l = 28 + TR() * 14; }
+    else { h = 285 + TR() * 35; s = 18 + TR() * 16; l = 14 + TR() * 12; }
+    if (v === 2) h = (h + 50) % 360;
+    return `hsl(${h},${s}%,${l}%)`;
+  };
+  for (let r = 0; r < rows; r++) {
+    const top = r * rh, base = top + rh - 8 * k;
+    const bg = x.createLinearGradient(0, top, 0, top + rh); bg.addColorStop(0, '#0a0604'); bg.addColorStop(1, '#241811'); x.fillStyle = bg; x.fillRect(0, top, S, rh);
+    let px = 12 * k;
+    while (px < S - 12 * k) {
+      if (v === 1 && TR() < .05) { px += (14 + TR() * 40) * k; continue; }          // a gap where books are missing
+      const w = (6 + TR() * 11) * k, h = rh * (.58 + TR() * .32), lean = (v !== 0 && TR() < .06) ? (TR() - .5) * .5 : 0, e = Math.max(1, k);
+      x.save(); x.translate(px + w / 2, base); x.rotate(lean);
+      x.fillStyle = col(); x.fillRect(-w / 2, -h, w, h);
+      x.fillStyle = 'rgba(255,255,255,.09)'; x.fillRect(-w / 2, -h, e, h);
+      x.fillStyle = 'rgba(0,0,0,.35)'; x.fillRect(w / 2 - e, -h, e, h);
+      if (TR() < .55) { x.fillStyle = 'rgba(214,180,100,.55)'; x.fillRect(-w / 2, -h + h * .12, w, 2 * k); x.fillRect(-w / 2, -h + h * .2, w, 1.5 * k); }
+      if (TR() < .4) { x.fillStyle = 'rgba(225,212,170,.3)'; x.fillRect(-w / 2 + w * .2, -h * .62, w * .6, h * .22); }
+      x.restore(); px += w + (1 + TR() * 1.5) * k;
+    }
+    x.fillStyle = '#2f1f13'; x.fillRect(0, top + rh - 8 * k, S, 8 * k);
+    x.fillStyle = 'rgba(255,225,170,.07)'; x.fillRect(0, top + rh - 8 * k, S, Math.max(1, 1.5 * k));
+    const sh = x.createLinearGradient(0, top, 0, top + rh * .3); sh.addColorStop(0, 'rgba(0,0,0,.55)'); sh.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = sh; x.fillRect(0, top, S, rh * .3);
+  }
+  x.fillStyle = '#2a1a0f'; x.fillRect(0, 0, 11 * k, S); x.fillRect(S - 11 * k, 0, 11 * k, S);
+  x.fillStyle = '#1c120a'; x.fillRect(0, 0, S, 7 * k);
+  for (let i = 0; i < 22; i++)blob(x, S, TR() * S, TR() * S, 20 + TR() * 50, 'rgba(120,108,86,A)', .05 + TR() * .07);
+  grain(x, S, S, 14);
+}
+function libPaintParquet(x, S) {
+  x.fillStyle = '#0d0907'; x.fillRect(0, 0, S, S);
+  const rows = 8, rh = S / rows;
+  for (let r = 0; r < rows; r++) {
+    let px = -TR() * S * .5;
+    while (px < S) {
+      const w = S * (.32 + TR() * .3);
+      x.fillStyle = `hsl(${22 + TR() * 10},${28 + TR() * 16}%,${12 + TR() * 9}%)`; x.fillRect(px + 2, r * rh + 2, w - 4, rh - 4);
+      for (let k = 0; k < 7; k++) { x.strokeStyle = `rgba(0,0,0,${.08 + TR() * .16})`; x.lineWidth = 1; const y = r * rh + 4 + TR() * (rh - 8); x.beginPath(); x.moveTo(px + 3, y); x.lineTo(px + w - 3, y + (TR() - .5) * 3); x.stroke(); }
+      x.fillStyle = 'rgba(255,230,180,.045)'; x.fillRect(px + 2, r * rh + 2, w - 4, 2);
+      px += w;
+    }
+  }
+  for (let i = 0; i < 40; i++)blob(x, S, TR() * S, TR() * S, 14 + TR() * 40, 'rgba(0,0,0,A)', .1 + TR() * .14);
+  for (let i = 0; i < 3; i++)crack(x, S, 'rgba(0,0,0,0.45)');
+  grain(x, S, S, 12);
+}
+function libPaintRug(x, S) {
+  x.fillStyle = '#4a1014'; x.fillRect(0, 0, S, S);
+  const p = S / 2; x.strokeStyle = 'rgba(176,138,64,.7)'; x.lineWidth = Math.max(1.5, S / 90);
+  for (let i = -2; i <= 4; i++) { x.beginPath(); x.moveTo(i * p, 0); x.lineTo(i * p + S, S); x.stroke(); x.beginPath(); x.moveTo(i * p, S); x.lineTo(i * p + S, 0); x.stroke(); }
+  x.fillStyle = 'rgba(22,58,50,.8)'; const q = S / 4;
+  for (let m = 0; m <= 4; m++)for (let n = 0; n <= 4; n++) { if ((m + n) % 2) continue; x.save(); x.translate(m * q, n * q); x.rotate(Math.PI / 4); x.fillRect(-S / 40, -S / 40, S / 20, S / 20); x.restore(); }
+  for (let i = 0; i < 30; i++)blob(x, S, TR() * S, TR() * S, 18 + TR() * 40, 'rgba(0,0,0,A)', .18);
+  grain(x, S, S, 18);
+}
+function libPaintCeil(x, S) {
+  x.fillStyle = '#1b130d'; x.fillRect(0, 0, S, S);
+  const n = 2, sz = S / n;
+  for (let r = 0; r < n; r++)for (let c = 0; c < n; c++) {
+    x.fillStyle = `hsl(${24 + TR() * 8},${25 + TR() * 12}%,${9 + TR() * 6}%)`; x.fillRect(c * sz + 10, r * sz + 10, sz - 20, sz - 20);
+    x.strokeStyle = 'rgba(0,0,0,.5)'; x.lineWidth = 4; x.strokeRect(c * sz + 10, r * sz + 10, sz - 20, sz - 20);
+    x.strokeStyle = 'rgba(255,220,160,.05)'; x.lineWidth = 2; x.strokeRect(c * sz + 15, r * sz + 15, sz - 30, sz - 30);
+  }
+  for (let i = 0; i < 50; i++)blob(x, S, TR() * S, TR() * S, 20 + TR() * 50, 'rgba(0,0,0,A)', .18 + TR() * .2);
+  grain(x, S, S, 14);
+}
+function libPaintPanel(x, S) {
+  x.fillStyle = '#2c1417'; x.fillRect(0, 0, S, S);
+  for (let i = 0; i < 90; i++) { x.fillStyle = 'rgba(120,70,60,.12)'; x.beginPath(); x.ellipse(TR() * S, TR() * S * .7, 5 + TR() * 8, 9 + TR() * 12, 0, 0, 7); x.fill(); }
+  x.fillStyle = '#25160d'; x.fillRect(0, S * .72, S, S * .28);
+  for (let i = 0; i < 4; i++) { x.strokeStyle = 'rgba(0,0,0,.55)'; x.lineWidth = 5; x.strokeRect(i * S / 4 + 12, S * .72 + 16, S / 4 - 24, S * .28 - 30); x.strokeStyle = 'rgba(255,220,160,.08)'; x.lineWidth = 2; x.strokeRect(i * S / 4 + 16, S * .72 + 20, S / 4 - 32, S * .28 - 38); }
+  x.fillStyle = '#3a2314'; x.fillRect(0, S * .72 - 6, S, 10);
+  for (let i = 0; i < 30; i++)blob(x, S, TR() * S, TR() * S, 20 + TR() * 50, 'rgba(0,0,0,A)', .16);
+  grain(x, S, S, 14);
+}
+function libPaintWeb(x, w, h) {
+  x.clearRect(0, 0, w, h); x.strokeStyle = 'rgba(225,225,215,.95)'; x.lineWidth = Math.max(1.5, w / 64); x.lineCap = 'round';
+  const n = 6;
+  for (let i = 0; i <= n; i++) { const a = i / n * Math.PI / 2; x.beginPath(); x.moveTo(0, 0); x.lineTo(Math.cos(a) * w, Math.sin(a) * h); x.stroke(); }
+  for (let r = 1; r <= 5; r++) {
+    const Rr = r / 5 * .96; x.beginPath(); x.moveTo(Rr * w, 0);
+    for (let i = 0; i < n; i++) { const a1 = (i + 1) / n * Math.PI / 2, am = (i + .5) / n * Math.PI / 2; x.quadraticCurveTo(Math.cos(am) * Rr * w * .8, Math.sin(am) * Rr * h * .8, Math.cos(a1) * Rr * w, Math.sin(a1) * Rr * h); }
+    x.stroke();
+  }
+}
+
+function libAssets(Q) {
+  if (A.lib) return;
+  const S = Q.tex, t = {};
+  t.shelfA = mk(S, S, (x, s) => libPaintShelf(x, s, 0)); t.shelfB = mk(S, S, (x, s) => libPaintShelf(x, s, 1)); t.shelfC = mk(S, S, (x, s) => libPaintShelf(x, s, 2));
+  t.panel = mk(S, S, libPaintPanel); t.floor = mk(S, S, libPaintParquet); t.rug = mk(S / 2, S / 2, libPaintRug); t.ceil = mk(S / 2, S / 2, libPaintCeil);
+  t.web = mk(128, 128, libPaintWeb, { repeat: false });
+  t.floor.repeat.set(LIB.W, LIB.H); t.ceil.repeat.set(LIB.W, LIB.H);      // the floor and ceiling are one big plane each: two draw calls for the whole level
+  A.lib = {
+    tex: t, shelfA: LitMat({ map: t.shelfA }), shelfB: LitMat({ map: t.shelfB }), shelfC: LitMat({ map: t.shelfC }), panel: LitMat({ map: t.panel }),
+    floor: LitMat({ map: t.floor }), rug: LitMat({ map: t.rug }), ceil: LitMat({ map: t.ceil }),
+    stone: LitMat({ map: A.tex.wall, color: 0xd8cdb6 }), web: LitMat({ map: t.web, alphaTest: .35, side: THREE.DoubleSide }),
+    candle: LitMat({ color: 0xe8dcc0 }), book: LitMat({ color: 0xffffff })
+  };
+  const bx = (w, h, d, x, y, z) => new THREE.BoxGeometry(w, h, d).translate(x, y, z);
+  const cyl = (rt, rb, h, seg, y) => new THREE.CylinderGeometry(rt, rb, h, seg).translate(0, y, 0);
+  LG.table = mergeGeos([bx(2.6, .1, 2.6, 0, .9, 0), bx(.16, .9, .16, 1.15, .45, 1.15), bx(.16, .9, .16, -1.15, .45, 1.15), bx(.16, .9, .16, 1.15, .45, -1.15), bx(.16, .9, .16, -1.15, .45, -1.15), bx(2.2, .06, .12, 0, .3, 1.15), bx(2.2, .06, .12, 0, .3, -1.15)]);
+  LG.pillar = mergeGeos([cyl(.55, .6, WH, 12, WH / 2), cyl(.8, .8, .3, 12, .15), cyl(.8, .8, .3, 12, WH - .15)]);
+  const rungs = []; for (let i = 0; i < 8; i++)rungs.push(bx(.56, .05, .05, 0, .45 + i * .4, 0));
+  LG.ladder = mergeGeos([bx(.07, 3.5, .05, -.28, 1.75, 0), bx(.07, 3.5, .05, .28, 1.75, 0), ...rungs]);
+  LG.chand = mergeGeos([new THREE.TorusGeometry(1.1, .05, 6, 18).rotateX(Math.PI / 2), bx(2.2, .04, .04, 0, 0, 0), bx(.04, .04, 2.2, 0, 0, 0), cyl(.02, .02, WH - 3.3, 4, (WH - 3.3) / 2)]);
+  LG.candle = cyl(.045, .05, .26, 8, .13);
+  LG.book = bx(.3, .05, .22, 0, 0, 0);
+}
+
+// dust motes hanging in the lamplight (the same drifting-points shader as the garden fireflies, in a warmer colour)
+function libDust(list, R) {
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(list, 3));
+  const ph = new Float32Array(list.length / 3); for (let i = 0; i < ph.length; i++)ph[i] = R();
+  geo.setAttribute('aPh', new THREE.BufferAttribute(ph, 1));
+  const m = fireMat(); m.fragmentShader = m.fragmentShader.replace('vec3(.85,1.,.45)', 'vec3(1.,.82,.5)');
+  const p = new THREE.Points(geo, m); p.frustumCulled = false; return p;
+}
+
+// ---------- the foyer: where you wake up ----------
+function libFoyer(root, world, glowL) {
+  const cy = world.cy, wood = A.wood;
+  const box = (w, h, d, x, y, z, m, ry = 0) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.rotation.y = ry; root.add(b); return b; };
+  const dz = (cy - 3) * T + 1.1, dx0 = 4.5 * T;
+  box(3.4, .12, 1.2, dx0, .98, dz, wood); box(3.2, .95, .2, dx0, .48, dz - .5, wood); box(.2, .95, 1.1, dx0 - 1.6, .48, dz, wood); box(.2, .95, 1.1, dx0 + 1.6, .48, dz, wood);   // librarian's desk
+  box(.6, .06, .6, dx0, .5, dz + 1.2, wood); box(.6, .7, .06, dx0, .85, dz + 1.5, wood); box(.06, .5, .06, dx0 - .27, .25, dz + .95, wood); box(.06, .5, .06, dx0 + .27, .25, dz + .95, wood);   // chair
+  box(.5, .06, .4, dx0 - 1.0, 1.07, dz, A.lib.book); box(.45, .05, .35, dx0 - 1.0, 1.125, dz, A.lib.candle);
+  // reading lamp on the desk
+  const lx = dx0 + 1.0, lz = dz;
+  box(.2, .05, .2, lx, 1.07, lz, A.lib.stone); box(.04, .42, .04, lx, 1.3, lz, A.lib.stone);
+  const shade = new THREE.Mesh(new THREE.ConeGeometry(.2, .2, 12, 1, true), LitMat({ color: 0x1f5a3a, side: THREE.DoubleSide })); shade.position.set(lx, 1.55, lz); root.add(shade);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(.07, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffe2a8 })); bulb.position.set(lx, 1.5, lz); root.add(bulb);
+  glowL.push([lx, 1.5, lz, 1, .75, .4]);
+  LIGHTS.push({ id: 'lamp', x: lx, y: 1.5, z: lz + .2, col: 0xffbe70, int: 2.9, d: 24, fl: .12, ph: 1.7, w: 3 });
+  // a few crates and a stack of returns
+  box(.9, .9, .9, 2 * T, .45, (cy + 2.6) * T, wood, .2); box(.7, .7, .7, 2 * T + .1, 1.25, (cy + 2.6) * T, wood, .8); box(.8, .8, .8, 6.2 * T, .4, (cy + 3) * T, wood, .5);
+  // door frame between the foyer and the first aisle, with a plaque over it
+  const dx = 8 * T + .15, dzz = (cy + .5) * T;
+  box(.25, 3.4, .25, dx, 1.7, dzz - T / 2 + .1, wood); box(.25, 3.4, .25, dx, 1.7, dzz + T / 2 - .1, wood); box(.3, .3, T, dx, 3.4, dzz, wood);
+  const c = document.createElement('canvas'); c.width = 512; c.height = 96; const x = c.getContext('2d');
+  x.font = '600 50px Cinzel, Georgia, serif'; x.textAlign = 'center'; x.fillStyle = 'rgba(224,196,140,0.95)'; x.shadowColor = '#000'; x.shadowBlur = 8; x.fillText('SILENCE, PLEASE', 256, 62);
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false })); sign.scale.set(2.4, .45, 1); sign.position.set(dx - .35, 3.85, dzz); root.add(sign);
+  // lantern just outside, so the way is faintly lit
+  const hx = 10 * T + .4, hz = (cy + .5) * T - T / 2 + .2;
+  box(.2, .34, .2, hx, 2.3, hz, A.lantB);
+  const hb = new THREE.Mesh(new THREE.BoxGeometry(.12, .22, .12), new THREE.MeshBasicMaterial({ color: 0xffc27a })); hb.position.set(hx, 2.3, hz); root.add(hb);
+  glowL.push([hx, 2.3, hz, 1, .72, .4]);
+  LIGHTS.push({ x: hx, y: 2.2, z: hz + .1, col: 0xffb45a, int: 1.8, d: 10, fl: .2, ph: 3, w: 1.5 });
+}
+
+// ---------- build ----------
+function libBuild(world, Q) {
+  const { g, tt, kd, rooms } = world, R = world.R, W = GW, H = GH, cyF = world.cy;
+  const root = new THREE.Group(); scene.add(root); world.root = root;
+  const I = (x, y) => y * W + x, TC = (t) => (t + .5) * T;
+  libAssets(Q);
+  const L = {}; for (const k of ['shelfA', 'shelfB', 'shelfC', 'panel', 'rug', 'pillar', 'table', 'candle', 'flame', 'book', 'lantB', 'lantC', 'web', 'ladder', 'chand']) L[k] = new IL();
+  L.rug.cs = 24;
+  const glowL = [], glowS = [], dust = [];
+  const cnt = (x) => Math.floor(x * Q.dens + R());
+  const jit = (l, h, s) => { const v = l + R() * (h - l); return new THREE.Color(v, v * (1 + (R() - .5) * s), v * (1 - (R() - .5) * s)); };
+  const FLAME = new THREE.Color(0xffa84a), BC = [0x6a2a24, 0x3a4a2c, 0x2a3552, 0x7a5a2a, 0x4a2a4a, 0x8a7a5a, 0x5a3a24].map(c => new THREE.Color(c));
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const isOpen = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 0;
+  const isShelf = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 1 && kd[I(x, y)] === 0;
+  const candle = (x, y, z, lit) => {
+    L.candle.add(x, y, z, 0); L.flame.add(x, y + .31, z, 0, .55, 1.1, .55, FLAME); glowL.push([x, y + .33, z, 1, .66, .29]);
+    if (lit) LIGHTS.push({ x, y: y + .5, z, col: 0xffb45a, int: 1.5, d: 8, fl: .28, ph: R() * 10, w: 1.2 });
+  };
+  for (let ty = 0; ty < H; ty++)for (let tx = 0; tx < W; tx++) {
+    const v = g[I(tx, ty)], k = kd[I(tx, ty)], cx = TC(tx), cz = TC(ty), tp = tt[I(tx, ty)];
+    if (v === 1 && k === 0) {          // a bookcase: only if someone could see it
+      let ex = false;
+      for (let a = -1; a <= 1 && !ex; a++)for (let b = -1; b <= 1; b++) if (isOpen(tx + a, ty + b)) { ex = true; break; }
+      if (!ex) continue;
+      const panel = tx === 0 || ty === 0 || tx === W - 1 || ty === H - 1 || (tx <= 10 && Math.abs(ty - cyF) <= 4), r = R();
+      (panel ? L.panel : r < .38 ? L.shelfA : r < .72 ? L.shelfB : L.shelfC).add(cx, WH / 2, cz, 0, 1, 1, 1, jit(.7, 1, .05));
+      continue;
+    }
+    if (v === 1 && k === 1) { L.pillar.add(cx, 0, cz, R() * 6.28, 1, 1, 1, jit(.8, 1, .04)); }
+    if (v === 1 && k === 2) {          // a reading table with candles and a few open books
+      L.table.add(cx, 0, cz, (R() - .5) * .3, 1, 1, 1, jit(.7, 1, .08));
+      if (R() < .75) candle(cx + (R() - .5) * 1.6, .95, cz + (R() - .5) * 1.6, R() < .55);
+      for (let j = (R() * 3) | 0; j >= 0; j--)L.book.add(cx + (R() - .5) * 1.9, .96 + j * .05, cz + (R() - .5) * 1.9, R() * 6.28, 1, 1, 1, BC[(R() * BC.length) | 0]);
+    }
+    if (v === 1) continue;
+    // open floor: rugs in the foyer centre and in every room, dust in the air
+    const inRoom = tp === 2 || tp === 5 || tp === 6, foyerRug = tp === 1 && tx >= 2 && tx <= 6 && Math.abs(ty - cyF) <= 2;
+    if (inRoom || foyerRug) L.rug.add(cx, .02, cz, 0, 1, 1, 1, jit(.8, 1, .05));
+    for (let n = cnt(inRoom ? 1.1 : .35); n > 0; n--)dust.push(cx + (R() - .5) * T, .5 + R() * 3, cz + (R() - .5) * T);
+    for (const [dx, dy] of DIRS) {
+      if (!isShelf(tx + dx, ty + dy)) continue;
+      const th = Math.atan2(-dx, -dy), tX = Math.cos(th), tZ = -Math.sin(th), bx = cx + dx * (T / 2 - .03), bz = cz + dy * (T / 2 - .03);
+      if (R() < .075) { const u = (R() - .5) * (T - .7), s = 1.1 + R(); L.web.add(bx + tX * u - dx * .05, WH - s / 2 - .04, bz + tZ * u - dy * .05, th + (R() < .5 ? Math.PI : 0), s, s, s); }
+      if (tp !== 1 && R() < .025) { const u = (R() - .5) * (T - 1); L.ladder.add(bx + tX * u - dx * .5, 0, bz + tZ * u - dy * .5, th, 1, 1, 1, null, -.14); }
+      if (R() < .012) glowS.push([bx - dx * .12, 1 + R() * 2.6, bz - dy * .12, 1, .8, .4]);      // a book that glows faintly
+      const lr = tp === 1 ? 0 : inRoom ? .07 : .04;
+      if (R() < lr) {
+        const rr = R(), colr = rr < .8 ? 0xffb45a : rr < .93 ? 0xffd890 : 0xff8a5a, cc = new THREE.Color(colr);
+        const lx = bx - dx * .14, lz = bz - dy * .14, ly = 2.25 + R() * .3;
+        L.lantB.add(lx, ly, lz, th); L.lantC.add(lx, ly, lz, th, 1, 1, 1, cc); glowL.push([lx, ly, lz, cc.r, cc.g, cc.b]);
+        LIGHTS.push({ x: lx, y: ly, z: lz, col: colr, int: 2.1, d: 11, fl: .18, ph: R() * 10, w: 1 });
+      }
+    }
+  }
+  // chandeliers over the great halls, and a cold light over the way out
+  for (const r of rooms) {
+    const mx = TC(r.x0 + (r.w - 1) / 2), mz = TC(r.y0 + (r.h - 1) / 2);
+    if (r.type === 5) {
+      for (const off of [-4, 0, 4]) {
+        const cx = mx + off * T;
+        L.chand.add(cx, 3.3, mz, 0);
+        for (let i = 0; i < 8; i++) { const a = i / 8 * 6.283; L.flame.add(cx + Math.cos(a) * 1.1, 3.45, mz + Math.sin(a) * 1.1, 0, .6, 1.2, .6, FLAME); glowL.push([cx + Math.cos(a) * 1.1, 3.48, mz + Math.sin(a) * 1.1, 1, .66, .29]); }
+        LIGHTS.push({ x: cx, y: 3.1, z: mz, col: 0xffc88a, int: 2.8, d: 20, fl: .1, ph: R() * 10, w: 2 });
+      }
+    }
+    if (r.type === 6) LIGHTS.push({ x: mx, y: 3.4, z: mz, col: 0x7dffc8, int: 1.4, d: 22, fl: 0, ph: 0, w: 1.3 });
+  }
+  const mk2 = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
+  mk2('shelfA', G.wall, A.lib.shelfA); mk2('shelfB', G.wall, A.lib.shelfB); mk2('shelfC', G.wall, A.lib.shelfC); mk2('panel', G.wall, A.lib.panel);
+  mk2('rug', G.floor, A.lib.rug); mk2('pillar', LG.pillar, A.lib.stone); mk2('table', LG.table, A.wood); mk2('candle', LG.candle, A.lib.candle); mk2('flame', G.bloom, A.flower);
+  mk2('book', LG.book, A.lib.book); mk2('lantB', G.lantB, A.lantB); mk2('lantC', G.lantC, A.lantC); mk2('web', G.quad, A.lib.web); mk2('ladder', LG.ladder, A.wood); mk2('chand', LG.chand, A.lantB);
+  // one floor and one ceiling for the whole level
+  const fl = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(-Math.PI / 2), A.lib.floor); fl.position.set(W * T / 2, 0, H * T / 2); root.add(fl);
+  const ce = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(Math.PI / 2), A.lib.ceil); ce.position.set(W * T / 2, WH, H * T / 2); root.add(ce);
+  fl.matrixAutoUpdate = ce.matrixAutoUpdate = false; fl.updateMatrix(); ce.updateMatrix();
+  libFoyer(root, world, glowL);
+  buildGates(root, world);
+  world.scares = findScareSpots(world);
+  if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
+  if (glowL.length) root.add(glowPoints(glowL, Q.glow * 1.8, A.tex.glow));
+  if (dust.length) { const dp = libDust(dust, R); root.add(dp); world.fireMat = dp.material; }
+  return world;
+}
+
+// ---------- level switch: walk through the open gate ----------
+function libFade(on, title, sub) {
+  let f = document.getElementById('lvFade');
+  if (!f) {
+    f = document.createElement('div'); f.id = 'lvFade';
+    f.style.cssText = 'position:fixed;inset:0;z-index:35;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;opacity:0;pointer-events:none;transition:opacity .8s ease;color:#e8efe6;text-align:center';
+    f.innerHTML = '<div id="lvT" style="font:700 36px Cinzel,Georgia,serif;letter-spacing:.22em"></div><div id="lvS" style="font:500 13px Inter,sans-serif;letter-spacing:.32em;color:#8da094;text-transform:uppercase"></div>';
+    document.body.appendChild(f);
+  }
+  if (title) { f.querySelector('#lvT').textContent = title; f.querySelector('#lvS').textContent = sub || ''; }
+  void f.offsetWidth; f.style.opacity = on ? 1 : 0;
+}
+function libTeardown() {
+  const w = world; if (!w) return;
+  if (w.root) {
+    scene.remove(w.root);
+    const sg = new Set(Object.values(G)), sm = new Set(); for (const k in A) if (A[k] && A[k].isMaterial) sm.add(A[k]); if (A.lib) for (const k in A.lib) if (A.lib[k] && A.lib[k].isMaterial) sm.add(A.lib[k]);
+    w.root.traverse(o => {
+      if (o.isInstancedMesh && o.dispose) o.dispose();
+      if (o.geometry && !sg.has(o.geometry)) o.geometry.dispose();
+      const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : []; for (const m of ms) if (!sm.has(m)) m.dispose();
+    });
+  }
+  CHUNKS.length = 0; LIGHTS.length = 0;
+  for (const p of pool) { p.cand = null; p.rel = false; p.cur = 0; p.l.intensity = 0; }
+  for (const f of flares) killFlare(f); flares.length = 0;
+  for (const p of pings) { scene.remove(p.beam); scene.remove(p.ring); p.el.remove(); DYN.delete(p.light); } pings.length = 0;
+  if (petals) { petals.age.fill(999); const a = petals.pts.geometry.attributes.position; a.array.fill(-999); a.needsUpdate = true; }
+}
+function libEnv(w) {        // fog, background, ambient light and sky for whichever level you are on
+  scene.fog.color.setHex(w.fogColor || 0x03070a); scene.background.setHex(w.fogColor || 0x02050a); scene.fog.density = w.fogD || .04;
+  hemi.color.setHex(w.lib ? 0x6a5030 : 0x3b5f6e); hemi.groundColor.setHex(w.lib ? 0x1a110a : 0x10170f);
+  for (const o of SKYOBJ) o.visible = !w.lib;
+}
+async function libEnter() {
+  if (lvBusy || LV !== 0 || !world || !started) return; lvBusy = true;
+  P.freeze = true; keys.clear(); joy.x = joy.y = 0; touchSprint = false; Torch.shaking = false;
+  Aud.shift(); libFade(true, 'LEVEL 2', 'The Library');
+  await wait(1100);
+  libTeardown(); LV = 1;
+  const w = libGen(mulberry32(hashStr(code + '|library')));
+  world = libBuild(w, Q);
+  explored = new Uint8Array(GW * GH);
+  const mm = $('#mm'); mm.width = GW * w.mmS; mm.height = GH * w.mmS;
+  libEnv(w);
+  const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = -Math.PI / 2; P.pitch = 0; P.flickT = .5;
+  if (Mim.st !== 'idle') mimicEnd(); Mim.t = Math.max(Mim.t, 75);
+  if (Scare.act) endScare(); Scare.quiet = 35;
+  applyRes(); startT = tNow; await frame();
+  net.set({ lv: 1, x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, e: 0 });
+  await wait(500); libFade(false); toast('Level 2 — the Library. Find the way out.');
+  P.freeze = false; lvBusy = false;
+}
+  </script>
+</body>
+
+</html>

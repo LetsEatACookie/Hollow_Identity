@@ -12,7 +12,8 @@
   <script>
 'use strict';
 // ---- world constants
-const T = 3.2, WH = 4.4, GW = 41, GH = 31;
+const T = 3.2, WH = 4.4;
+let GW = 41, GH = 31, SKYOBJ = [];     // GW/GH change per level (the library is bigger); SKYOBJ = stars + moon, hidden indoors
 // ---- the way out hops between gate sites. Tune these:
 const EXIT_SITES = 4;        // how many places the gate can appear
 const EXIT_SHIFT_S = 150;    // the open gate moves to a new site every this many seconds
@@ -184,7 +185,7 @@ function buildWorld(world, Q) {
     const cx = (r.x0 + r.w / 2) * T, cz = (r.y0 + r.h / 2) * T;
     LIGHTS.push({ x: cx, y: 6.5, z: cz, col: r.type === 4 ? 0x7dffc8 : 0x7da4ff, int: 1.55, d: r.w > 5 || r.h > 5 ? 25 : 21, fl: 0, ph: 0, w: 1.3 });
   }
-  const mkI = (k, geo, mat) => L[k].build(geo, mat, root);
+  const mkI = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
   mkI('wall', G.wall, A.wall); mkI('hedge', G.hedge, A.hedge); mkI('fStone', G.floor, A.floorStone); mkI('fGrass', G.floor, A.floorGrass); mkI('fMoss', G.floor, A.floorMoss); mkI('ceil', G.ceil, A.ceil);
   mkI('ivy', G.quad, A.ivy); mkI('vine', G.vine, A.vine); mkI('tuft', G.tuft, A.tuft); mkI('fern', G.fern, A.fern); mkI('leafy', G.leafy, A.leafy);
   mkI('bush', G.bush, A.bush); mkI('stem', G.stem, A.stem); mkI('bloom', G.bloom, A.flower); mkI('mcap', G.mcap, A.mcap); mkI('mstem', G.mstem, A.mstem);
@@ -293,7 +294,7 @@ function updateGates(dt, t) {
     world.activeIdx = want; world.exit = world.sites[want]; world.warned = false;
     toast('The way out has moved.'); Aud.shift();
   }
-  const warn = left < EXIT_WARN_S;
+  const warn = gs.length > 1 && left < EXIT_WARN_S;      // a level with a single fixed gate never flickers
   if (warn && !world.warned) { world.warned = true; toast('The gate is flickering… it won’t stay here long.'); Aud.rumble(); }
   for (let i = 0; i < gs.length; i++) {
     const G = gs[i], on = i === world.activeIdx;
@@ -331,13 +332,19 @@ function buildSky() {
   const g = x.createRadialGradient(128, 128, 0, 128, 128, 128); g.addColorStop(0, 'rgba(220,235,255,1)'); g.addColorStop(.18, 'rgba(210,228,255,.95)'); g.addColorStop(.22, 'rgba(160,190,255,.35)'); g.addColorStop(1, 'rgba(120,160,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 256, 256);
   const moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(mc), fog: false, transparent: true, depthWrite: false }));
   moon.scale.set(90, 90, 1); moon.position.set(-160, 250, -220); moon.renderOrder = -1; scene.add(moon);
+  SKYOBJ = [stars, moon];
   return stars;
 }
 
 function drawMap() {
-  const c = $('#mm'), x = c.getContext('2d'), s = 5, ax = world.exit; x.fillStyle = '#070b09'; x.fillRect(0, 0, c.width, c.height);
+  const c = $('#mm'), x = c.getContext('2d'), s = world.mmS || 5, ax = world.exit; x.fillStyle = '#070b09'; x.fillRect(0, 0, c.width, c.height);
   for (let ty = 0; ty < GH; ty++)for (let tx = 0; tx < GW; tx++) {
     if (!explored[ty * GW + tx]) continue; const v = world.g[ty * GW + tx], tp = world.tt[ty * GW + tx];
+    if (world.lib) {      // the library has its own colours
+      const k = world.kd[ty * GW + tx];
+      x.fillStyle = v === 1 ? (k === 0 ? '#2b1d14' : k === 1 ? '#3c3c44' : '#5a4028') : tp === 6 ? ((Math.abs(tx - ax.tx) <= 4 && Math.abs(ty - ax.ty) <= 4) ? '#35d6a0' : '#3a463d') : tp === 5 ? '#6a4a2a' : tp === 2 ? '#5a2a2a' : tp === 1 ? '#4a4435' : '#3a3228';
+      x.fillRect(tx * s, ty * s, s, s); continue;
+    }
     x.fillStyle = v === 1 ? '#161d18' : v === 2 ? '#1f4a2a' : v === 3 ? '#2d6b3d' : tp === 4 ? ((tx >= ax.tx && tx < ax.tx + 5 && ty >= ax.ty && ty < ax.ty + 5) ? '#35d6a0' : '#2a5a38') : tp === 3 ? '#2a5a38' : tp === 2 ? '#344a2c' : tp === 1 ? '#4a4435' : '#3a463d';
     x.fillRect(tx * s, ty * s, s, s);
   }
