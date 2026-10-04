@@ -1352,6 +1352,8 @@
           step="5"><output></output></div>
       <div class="set"><label for="sGrain">Film grain</label><input id="sGrain" type="checkbox"></div>
       <div class="set"><label for="sScare">Jumpscares</label><input id="sScare" type="checkbox"></div>
+      <div class="set"><label for="sMimic">The Mimic (shapeshifter)</label><input id="sMimic" type="checkbox"></div>
+      <div class="set"><label for="sMimicVoice">Mimic may borrow my voice</label><input id="sMimicVoice" type="checkbox"></div>
       <div class="set"><label for="sFps">Show FPS</label><input id="sFps" type="checkbox"></div>
       <div class="set"><span>Voice chat</span><button type="button" class="q" id="vcPause">Enable mic</button></div>
       <div class="set hide" id="pRoomRow"><span>Room code</span><b id="pCode"></b><button type="button" class="q"
@@ -1385,17 +1387,17 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script>
-    // Loads characters.html + maps.html before the game starts. Needs http(s): GitHub Pages, Netlify, VS Code Live Server... (not a double-clicked file://)
+    // Loads characters.html + maps.html + entity.html before the game starts. Needs http(s): GitHub Pages, Netlify, VS Code Live Server... (not a double-clicked file://)
     (function () {
       try {
-        ['characters.html', 'maps.html'].forEach(function (f) {
+        ['characters.html', 'maps.html', 'entity.html'].forEach(function (f) {
           var x = new XMLHttpRequest(); x.open('GET', f, false); x.send();
           if (x.status >= 400 || !x.responseText) throw new Error(f + ' not found');
           var el = new DOMParser().parseFromString(x.responseText, 'text/html').querySelector('script');
           var s = document.createElement('script'); s.textContent = el.textContent + '\n//# sourceURL=' + f; document.head.appendChild(s);
         });
       } catch (e) {
-        document.body.insertAdjacentHTML('beforeend', '<div class="loaderr"><b>Couldn\u2019t load characters.html / maps.html.</b><br>Open the game through a web server (Live Server, GitHub Pages, Netlify) and keep all three files in the same folder.</div>');
+        document.body.insertAdjacentHTML('beforeend', '<div class="loaderr"><b>Couldn\u2019t load characters.html / maps.html / entity.html.</b><br>Open the game through a web server (Live Server, GitHub Pages, Netlify) and keep all four files in the same folder.</div>');
         throw e;
       }
     })();
@@ -1794,7 +1796,7 @@
       let hemi, spot, fill, torchGroup, torchLens, pool = [], poolTimer = 0, petals = null, explored = null;
       const net = { r: null, kind: 'none', set(p) { if (this.r) this.r.presence(p).catch(() => { }); } };
       const isTouch = (window.matchMedia && matchMedia('(pointer:coarse)').matches) || ('ontouchstart' in window);
-      const CFG = Object.assign({ v: 2, res: 100, auto: true, dist: 45, lights: 3, fov: 72, sens: 100, inv: false, vol: 85, fps: true, grain: false, scares: true }, (() => { try { const o = JSON.parse(localStorage.getItem('hg-set') || '{}'); return o.v === 2 ? o : {}; } catch (e) { return {}; } })());
+      const CFG = Object.assign({ v: 2, res: 100, auto: true, dist: 45, lights: 3, fov: 72, sens: 100, inv: false, vol: 85, fps: true, grain: false, scares: true, mimic: true, mimicVoice: true }, (() => { try { const o = JSON.parse(localStorage.getItem('hg-set') || '{}'); return o.v === 2 ? o : {}; } catch (e) { return {}; } })());
       const saveS = () => { try { localStorage.setItem('hg-set', JSON.stringify(CFG)); } catch (e) { } };
       let autoK = 1, paused = false, everLocked = false, pauseT = 0, mX = innerWidth / 2, mY = innerHeight / 2, fpsAcc = 0, fpsN = 0, adaptT = 0, upN = 0, lockToast = false, bdDown = false, leaveArm = 0;
       const frustum = new THREE.Frustum(), pvm = new THREE.Matrix4(), CHUNKS = [];
@@ -1969,7 +1971,7 @@
             seen.add(p.peer); let r = remotes.get(p.peer); if (!r) r = createRemote(p); r.pr = pr;
           }
         }
-        for (const [id, r] of remotes) { if (!seen.has(id)) { scene.remove(r.av); DYN.delete(r.light); remotes.delete(id); toast(r.name + ' left'); } }
+        for (const [id, r] of remotes) { if (!seen.has(id)) { scene.remove(r.av); DYN.delete(r.light); remotes.delete(id); mimicForget(id); toast(r.name + ' left'); } }
         for (const r of remotes.values()) {
           const pr = r.pr, k = 1 - Math.exp(-12 * dt); let dx = pr.x - r.x, dz = pr.z - r.z;
           if (Math.hypot(dx, dz) > 9) { r.x = pr.x; r.z = pr.z; dx = dz = 0; }
@@ -2341,12 +2343,12 @@
         VC.ctx = VC.ctx || new (window.AudioContext || window.webkitAudioContext)(); VC.ctx.resume();
         VC.on = true; VC.muted = false;
         if (!VC.hooked) { VC.hooked = true; net.r.peer.on('call', (call) => { if (!VC.on) { call.close(); return; } call.answer(VC.stream); vcAttach(call); }); }
-        net.set({ vc: 1 }); vcUi(); toast('Voice chat on — people near you can hear you');
+        net.set({ vc: 1, mv: CFG.mimicVoice ? 1 : 0 }); vcUi(); toast(CFG.mimicVoice ? 'Voice chat on — and the Mimic may borrow voices (Settings to opt out)' : 'Voice chat on — people near you can hear you');
       }
       function vcStop() {
         VC.on = false; for (const id of [...VC.calls.keys()]) vcDrop(id);
         if (VC.stream) VC.stream.getTracks().forEach(t => t.stop()); VC.stream = null;
-        net.set({ vc: 0 }); vcUi();
+        net.set({ vc: 0, mv: 0 }); vcUi();
       }
       function vcMute() { if (!VC.on) return; VC.muted = !VC.muted; VC.stream.getAudioTracks().forEach(t => { t.enabled = !VC.muted; }); vcUi(); }
       function vcAttach(call) {
@@ -2360,10 +2362,10 @@
         vcUnplay(id);
         const a = new Audio(); a.srcObject = rs; a.muted = true; a.play().catch(() => { });   // Chrome only feeds a remote stream to Web Audio while it's attached to an element
         const src = VC.ctx.createMediaStreamSource(rs), gain = VC.ctx.createGain(), pan = VC.ctx.createStereoPanner ? VC.ctx.createStereoPanner() : null;
-        gain.gain.value = 0; src.connect(gain); if (pan) { gain.connect(pan); pan.connect(VC.ctx.destination); } else gain.connect(VC.ctx.destination);
+        gain.gain.value = 0; src.connect(gain); mimicTap(id, VC.ctx, src); if (pan) { gain.connect(pan); pan.connect(VC.ctx.destination); } else gain.connect(VC.ctx.destination);
         VC.nodes.set(id, { a, src, gain, pan });
       }
-      function vcUnplay(id) { const n = VC.nodes.get(id); if (!n) return; VC.nodes.delete(id); try { n.src.disconnect(); n.gain.disconnect(); if (n.pan) n.pan.disconnect(); n.a.srcObject = null; } catch (e) { } }
+      function vcUnplay(id) { mimicUntap(id); const n = VC.nodes.get(id); if (!n) return; VC.nodes.delete(id); try { n.src.disconnect(); n.gain.disconnect(); if (n.pan) n.pan.disconnect(); n.a.srcObject = null; } catch (e) { } }
       function vcDrop(id) { const c = VC.calls.get(id); VC.calls.delete(id); try { if (c) c.close(); } catch (e) { } vcUnplay(id); }
       function vcConnect() {
         const live = new Set(), mineId = net.r.myId;
@@ -2560,10 +2562,10 @@
         if (fps < 54) { upN = 0; if (autoK > .4) { autoK = Math.max(.4, autoK - (fps < 38 ? .15 : .08)); adaptT = 1.6; applyRes(); } }
         else if (fps > 58 && autoK < 1) { if (++upN >= 4) { upN = 0; autoK = Math.min(1, autoK + .05); applyRes(); } }
       }
-      const SETS = [['sRes', 'res', 'change'], ['sDist', 'dist', 'input'], ['sLights', 'lights', 'change'], ['sFov', 'fov', 'input'], ['sSens', 'sens', 'input'], ['sVol', 'vol', 'input']], CHK = [['sAuto', 'auto'], ['sInv', 'inv'], ['sFps', 'fps'], ['sGrain', 'grain'], ['sScare', 'scares']], UN = { res: '%', dist: ' m', lights: '', fov: '°', sens: '%', vol: '%' };
+      const SETS = [['sRes', 'res', 'change'], ['sDist', 'dist', 'input'], ['sLights', 'lights', 'change'], ['sFov', 'fov', 'input'], ['sSens', 'sens', 'input'], ['sVol', 'vol', 'input']], CHK = [['sAuto', 'auto'], ['sInv', 'inv'], ['sFps', 'fps'], ['sGrain', 'grain'], ['sScare', 'scares'], ['sMimic', 'mimic'], ['sMimicVoice', 'mimicVoice']], UN = { res: '%', dist: ' m', lights: '', fov: '°', sens: '%', vol: '%' };
       function syncUI() { for (const [id, k] of SETS) { const el = $('#' + id); el.value = CFG[k]; el.nextElementSibling.textContent = CFG[k] + UN[k]; } for (const [id, k] of CHK) $('#' + id).checked = !!CFG[k]; }
       for (const [id, k, ev] of SETS) { const el = $('#' + id); el.addEventListener('input', () => { el.nextElementSibling.textContent = el.value + UN[k]; }); el.addEventListener(ev, () => { CFG[k] = +el.value; if (world) applyAll(); }); }
-      for (const [id, k] of CHK) $('#' + id).addEventListener('change', (e) => { CFG[k] = e.target.checked; if (world) applyAll(); });
+      for (const [id, k] of CHK) $('#' + id).addEventListener('change', (e) => { CFG[k] = e.target.checked; if (world) applyAll(); if (k === 'mimicVoice') mimicConsent(); });
       $('#pResume').addEventListener('click', closePause);
       $('#pause').addEventListener('mousedown', (e) => { bdDown = e.target === e.currentTarget; });
       $('#pause').addEventListener('click', (e) => { if (bdDown && e.target === e.currentTarget) closePause(); });
@@ -2578,7 +2580,7 @@
         const t = ms / 1000, raw = t - lastT || .016, dt = Math.min(.05, raw); lastT = t; tNow = t; uTime.value = t; perfTick(raw);
         if (!world || !previewAv && !started) return;
         if (started) update(dt, t); else previewCam(t);
-        updatePool(dt, t); updateFlares(dt); updateRemotes(dt, t); vcFrame(); updatePings(dt); if (petals) updatePetals(dt);
+        updatePool(dt, t); updateFlares(dt); updateRemotes(dt, t); updateMimic(dt, t); vcFrame(); updatePings(dt); if (petals) updatePetals(dt);
         cullChunks(); renderer.render(scene, camera);
       }
       resize(); requestAnimationFrame(loop);

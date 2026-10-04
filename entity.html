@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - the Mimic</title>
+</head>
+
+<body>
+  <!-- ALL ABOUT THE MIMIC: a shapeshifter that wears a teammate's body, name tag and (if it has heard them) their voice.
+       index.html loads this file at start-up and runs the script below as part of the game.
+       Like the jumpscares it is local to each player: nothing about it is sent over the network.
+       VOICE PRIVACY: clips are short snippets of a teammate's voice-chat stream, kept in memory on YOUR machine only. They are never
+       uploaded or saved, are wiped when the page closes, and are only recorded from players who have "Mimic can borrow my voice" ticked. -->
+  <script>
+'use strict';
+// ---------- tuning ----------
+const MIMIC = {
+  firstDelay: 100, minGap: 80, maxGap: 160,   // seconds: before the first visit · between visits
+  lureCalls: 3,                               // how many times it calls out from behind the walls before it comes looking
+  life: 80,                                   // gives up after this many seconds
+  hearRange: 26, hearFull: 4,                 // its voice: full volume inside hearFull, silent beyond hearRange
+  creep: 3.0, creepWatched: .9,               // speed when you're not looking · when you look at it with no light
+  biteR: 1.25,                                // contact range
+  exposeS: 1.3, exposeDist: 9                 // keep your flashlight on it this long, this close, and the disguise breaks
+};
+
+// ================= voice bank: short clips of teammates, for the Mimic to replay =================
+const VB = { clips: new Map(), taps: new Map(), ok: new Set(), max: 8, minS: .5, maxS: 4, tick: 0 };
+
+// listen in on a teammate's voice-chat stream (called from vcPlay). Splits speech into utterances with a simple loudness gate.
+function mimicTap(id, ctx, src) {
+  mimicUntap(id);
+  if (!ctx.createScriptProcessor) return;                              // no capture support: the Mimic falls back to a synthetic murmur
+  const proc = ctx.createScriptProcessor(2048, 1, 1), mute = ctx.createGain(); mute.gain.value = 0;
+  const st = { proc, mute, src, parts: [], n: 0, qb: 0, talk: false, floor: .004 };
+  proc.onaudioprocess = (e) => vbBlock(id, st, e.inputBuffer.getChannelData(0), ctx.sampleRate);
+  src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);   // (the muted gain just keeps the processor running)
+  VB.taps.set(id, st);
+}
+function mimicUntap(id) {
+  const st = VB.taps.get(id); if (!st) return; VB.taps.delete(id);
+  try { st.proc.onaudioprocess = null; st.src.disconnect(st.proc); st.proc.disconnect(); st.mute.disconnect(); } catch (e) { }
+}
+function mimicForget(id) { mimicUntap(id); VB.clips.delete(id); }
+function vbBlock(id, st, x, rate) {
+  if (!CFG.mimicVoice || !VB.ok.has(id)) { if (st.parts.length) { st.parts = []; st.n = 0; } st.talk = false; return; }
+  let s = 0; for (let i = 0; i < x.length; i++) s += x[i] * x[i];
+  const rms = Math.sqrt(s / x.length), loud = rms > Math.max(.012, st.floor * 3.5);
+  if (loud || st.talk) {
+    const d = new Float32Array(x.length >> 1); for (let i = 0; i < d.length; i++) d[i] = (x[2 * i] + x[2 * i + 1]) * .5;   // half rate: smaller, and gives it a thin phone-line quality
+    st.parts.push(d); st.n += d.length;
+    if (loud) { st.talk = true; st.qb = 0; } else st.qb++;
+    if ((st.talk && st.qb * x.length / rate > .4) || st.n / (rate / 2) > VB.maxS) vbFinish(id, st, rate / 2);
+  } else st.floor = st.floor * .97 + rms * .03;      // learn the room's background noise while nobody is talking
+}
+function vbFinish(id, st, rate) {
+  const drop = Math.max(0, st.qb - 3); st.parts.length -= Math.min(drop, st.parts.length);
+  let n = 0; for (const p of st.parts) n += p.length;
+  if (n / rate >= VB.minS) {
+    const d = new Float32Array(n); let o = 0, peak = 0; for (const p of st.parts) { d.set(p, o); o += p.length; }
+    for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(d[i]));
+    const k = Math.min(4, .6 / Math.max(peak, .02)), f = Math.min(n >> 1, (rate * .02) | 0);
+    for (let i = 0; i < n; i++) { let g = k; if (i < f) g *= i / f; else if (n - i < f) g *= (n - i) / f; d[i] *= g; }
+    let list = VB.clips.get(id); if (!list) VB.clips.set(id, list = []);
+    list.push({ d, r: rate }); if (list.length > VB.max) list.splice((Math.random() * (list.length - 1)) | 0, 1);
+  }
+  st.parts = []; st.n = 0; st.qb = 0; st.talk = false;
+}
+// who is allowed to be recorded: only players whose presence says mv:1 ("Mimic can borrow my voice"). Un-ticking wipes their clips everywhere.
+function mimicSync() {
+  const now = performance.now(); if (now - VB.tick < 1000) return; VB.tick = now;
+  VB.ok.clear(); if (net.r) for (const p of net.r.peers()) if (!p.isMe && p.presence && p.presence.mv === 1) VB.ok.add(p.peer);
+  for (const id of [...VB.clips.keys()]) if (!VB.ok.has(id) || !CFG.mimicVoice) VB.clips.delete(id);
+}
+function mimicConsent() { net.set({ mv: CFG.mimicVoice ? 1 : 0 }); if (!CFG.mimicVoice) VB.clips.clear(); }
+
+// ================= its voice =================
+// a breathy synthetic murmur, used when it has no recording of the person it is wearing
+function mimicSynth(c, out, harsh) {
+  const dur = harsh ? 1.1 : 1.1 + Math.random() * 1.3, t0 = c.currentTime + .02, f0 = 105 + Math.random() * 70;
+  const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(f0, t0); o.frequency.linearRampToValueAtTime(f0 * (harsh ? .6 : .85 + Math.random() * .3), t0 + dur);
+  const vib = c.createOscillator(), vg = c.createGain(); vib.frequency.value = 5.2; vg.gain.value = 3; vib.connect(vg); vg.connect(o.frequency);
+  const amp = c.createGain(), f1 = c.createBiquadFilter(), f2 = c.createBiquadFilter(), mix = c.createGain();
+  f1.type = f2.type = 'bandpass'; f1.Q.value = 6; f2.Q.value = 9; amp.gain.value = 0; mix.gain.value = 2.2;
+  o.connect(amp); amp.connect(f1); amp.connect(f2); f1.connect(mix); f2.connect(mix); mix.connect(out);
+  const V = [[730, 1090], [530, 1840], [660, 1720], [400, 800], [300, 2300], [570, 840]], n = Math.max(3, Math.round(dur / .2)), sl = dur / n;
+  for (let i = 0; i < n; i++) {
+    const t = t0 + i * sl, v = V[(Math.random() * V.length) | 0]; f1.frequency.setValueAtTime(v[0], t); f2.frequency.setValueAtTime(v[1], t);
+    amp.gain.setValueAtTime(.0001, t); amp.gain.linearRampToValueAtTime(.5, t + sl * .3); amp.gain.linearRampToValueAtTime(.06, t + sl * .95);
+  }
+  amp.gain.linearRampToValueAtTime(.0001, t0 + dur + .05);
+  o.start(t0); vib.start(t0); o.stop(t0 + dur + .1); vib.stop(t0 + dur + .1);
+  return dur + .1;
+}
+// say something: a recorded clip of whoever it is wearing (slowed a touch and doubled so it sounds hollow), else a murmur
+function mimicSpeak(kind) {
+  const c = Aud.ctx; if (!c || !Aud.m) return;
+  const hp = c.createBiquadFilter(), lp = c.createBiquadFilter(), g = c.createGain(), pan = c.createStereoPanner ? c.createStereoPanner() : null;
+  hp.type = 'highpass'; hp.frequency.value = 130; lp.type = 'lowpass'; lp.frequency.value = 900; g.gain.value = 0;
+  hp.connect(lp); lp.connect(g); if (pan) { g.connect(pan); pan.connect(Aud.m); } else g.connect(Aud.m);
+  const bank = (Mim.srcId != null && CFG.mimicVoice) ? VB.clips.get(Mim.srcId) : null; let dur;
+  if (bank && bank.length) {
+    let k = (Math.random() * bank.length) | 0; if (bank.length > 1 && k === Mim.lastClip) k = (k + 1) % bank.length; Mim.lastClip = k;
+    const cl = bank[k], buf = c.createBuffer(1, cl.d.length, cl.r), rate = kind === 'shriek' ? .72 : .9 + Math.random() * .06;
+    buf.copyToChannel(cl.d, 0);
+    for (const [off, gain, rt] of [[0, 1, rate], [.02, .45, rate * 1.015]]) {
+      const s = c.createBufferSource(), sg = c.createGain(); s.buffer = buf; s.playbackRate.value = rt; sg.gain.value = gain; s.connect(sg); sg.connect(hp); s.start(c.currentTime + off);
+    }
+    dur = cl.d.length / cl.r / rate + .1;
+  } else dur = mimicSynth(c, hp, kind === 'shriek');
+  Mim.voice = { g, pan, lp, end: c.currentTime + dur };
+  setTimeout(() => { try { g.disconnect(); } catch (e) { } }, (dur + .4) * 1000);
+}
+// keeps its voice coming from where it stands: quieter with distance, panned to the side, muffled when walls are in the way
+function mimicVoiceFrame() {
+  const v = Mim.voice; if (!v || !Aud.ctx) return;
+  const now = Aud.ctx.currentTime; if (now > v.end + .3) { Mim.voice = null; return; }
+  const dx = Mim.x - P.x, dz = Mim.z - P.z, d = Math.hypot(dx, dz), rx = Math.cos(P.yaw), rz = -Math.sin(P.yaw);
+  let gv = clamp((MIMIC.hearRange - d) / (MIMIC.hearRange - MIMIC.hearFull), 0, 1); gv *= gv;
+  v.g.gain.setTargetAtTime(gv * .9, now, .05); v.lp.frequency.setTargetAtTime(mimicLOS(Mim.x, Mim.z, P.x, P.z) ? 3400 : 900, now, .1);
+  if (v.pan) v.pan.pan.setTargetAtTime(clamp((dx * rx + dz * rz) / Math.max(d, .001), -1, 1) * clamp(d / 3, 0, 1) * .8, now, .08);
+}
+
+// ================= the body =================
+const Mim = { st: 'idle', t: MIMIC.firstDelay, av: null, tag: null, light: null, x: 0, z: 0, ry: 0, name: '', srcId: null, targetId: null, calls: 0, callT: 0, expose: 0, life: 0, exT: 0, path: null, pathT: 0, voice: null, lastClip: -1, tagT: 3, glitchT: 0, fadeT: 0, self: false };
+
+function mimicTag(txt, color) {       // a name tag like the real ones, but redrawable so it can glitch
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64; const x = c.getContext('2d'), tex = new THREE.CanvasTexture(c);
+  const draw = (s) => { x.clearRect(0, 0, 256, 64); x.font = '600 28px Inter, system-ui, sans-serif'; x.textAlign = 'center'; x.shadowColor = '#000'; x.shadowBlur = 6; x.fillStyle = '#' + new THREE.Color(color).getHexString(); x.fillText(s, 128, 40); tex.needsUpdate = true; };
+  draw(txt); const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false })); s.scale.set(1.5, .375, 1); s.position.y = 2.0; s.userData.draw = draw; return s;
+}
+function mimicHollowOut() {           // the disguise slips: grey skin, stretched head, black eyes, long arms
+  const u = Mim.av.userData, h = u.head;
+  h.children[0].material.color.setHex(0xb4bbb2); h.scale.set(.82, 1.35, .9);
+  h.children[1].scale.setScalar(2.4); h.children[2].scale.setScalar(2.4);
+  u.armL.scale.y = u.armR.scale.y = 1.45; u.armL.rotation.x = .25; u.armR.rotation.x = .2;
+}
+function mimicLOS(ax, az, bx, bz) {   // walls and trees block sight; hedges don't
+  const d = Math.hypot(bx - ax, bz - az), n = Math.ceil(d / .8);
+  for (let i = 1; i < n; i++) { const f = i / n, v = tileV(Math.floor((ax + (bx - ax) * f) / T), Math.floor((az + (bz - az) * f) / T)); if (v === 1 || v === 3) return false; }
+  return true;
+}
+function mimicBFS(sx, sy, maxD) {
+  const n = GW * GH, dist = new Int16Array(n).fill(-1), prev = new Int32Array(n).fill(-1), q = [sy * GW + sx]; dist[q[0]] = 0;
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h]; if (maxD && dist[c] >= maxD) continue; const cx = c % GW, cy = (c / GW) | 0;
+    for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = cx + ax, ny = cy + ay; if (nx < 0 || ny < 0 || nx >= GW || ny >= GH) continue;
+      const ni = ny * GW + nx; if (dist[ni] >= 0 || world.g[ni] !== 0) continue; dist[ni] = dist[c] + 1; prev[ni] = c; q.push(ni);
+    }
+  }
+  return { dist, prev };
+}
+function mimicPath(fx, fz, tx, tz) {  // tile-centre waypoints from (fx,fz) to (tx,tz), or null if there is no way
+  const sx = Math.floor(fx / T), sy = Math.floor(fz / T), ex = Math.floor(tx / T), ey = Math.floor(tz / T);
+  if (sx === ex && sy === ey) return [];
+  const { dist, prev } = mimicBFS(sx, sy, 0), goal = ey * GW + ex; if (dist[goal] < 0) return null;
+  const out = []; for (let c = goal; c !== sy * GW + sx; c = prev[c]) out.push({ x: ((c % GW) + .5) * T, z: (((c / GW) | 0) + .5) * T });
+  return out.reverse();
+}
+function mimicSpot() {                // somewhere a few turns away that is hidden behind walls
+  const { dist } = mimicBFS(Math.floor(P.x / T), Math.floor(P.z / T), 10), c = [];
+  for (let i = 0; i < dist.length; i++) {
+    if (dist[i] < 5 || dist[i] > 10) continue; const x = ((i % GW) + .5) * T, z = (((i / GW) | 0) + .5) * T;
+    if (Math.hypot(x - P.x, z - P.z) > 12 && !mimicLOS(P.x, P.z, x, z)) c.push({ x, z });
+  }
+  return c.length ? pick(c) : null;
+}
+function mimicWho() {                 // who to wear: a teammate far from you if there is one, otherwise you
+  const far = [];
+  for (const [id, r] of remotes) if (Math.hypot(r.x - P.x, r.z - P.z) > 24) far.push({ id, r, rec: (VB.clips.get(id) || []).length > 0 });
+  if (far.length) { const rec = far.filter(f => f.rec), f = pick(rec.length ? rec : far); return { id: f.id, name: f.r.name, skin: Math.max(0, SKINS.indexOf(f.r.sk)), self: false }; }
+  if (!remotes.size) return { id: null, name: me.name, skin: me.skin, self: true };      // alone: it wears YOU
+  const sk = pick(SKINS.map((_, i) => i).filter(i => i !== me.skin));                      // teammates all nearby: a stranger
+  return { id: null, name: pick(FIRST) + ' ' + pick(LAST), skin: sk, self: false };
+}
+
+function mimicStart() {
+  if (!world || !started || Mim.st !== 'idle') return false;
+  const spot = mimicSpot(); if (!spot) { Mim.t = 8; return false; }
+  const who = mimicWho(), sk = SKINS[who.skin];
+  Mim.av = makeAvatar(sk); Mim.tag = mimicTag(String(who.name).slice(0, 24), sk.accent); Mim.av.add(Mim.tag); Mim.av.position.set(spot.x, 0, spot.z); scene.add(Mim.av);
+  Mim.light = { x: spot.x, y: 1.6, z: spot.z, col: 0x9fb4ff, int: .3, d: 5, fl: .35, ph: Math.random() * 9, w: 1 }; DYN.add(Mim.light);   // a faint cold glow — real teammates carry a warm torch
+  Object.assign(Mim, { st: 'lure', x: spot.x, z: spot.z, ry: 0, name: who.name, srcId: who.id, targetId: who.id, self: who.self, calls: 0, callT: 1.5 + Math.random() * 2, expose: 0, life: 0, exT: 0, path: null, pathT: 0, tagT: 2 + Math.random() * 2, glitchT: 0, fadeT: 0 });
+  return true;
+}
+function mimicEnd() {
+  if (Mim.av) { scene.remove(Mim.av); Mim.av = null; } if (Mim.light) { DYN.delete(Mim.light); Mim.light = null; }
+  Mim.st = 'idle'; Mim.t = MIMIC.minGap + Math.random() * (MIMIC.maxGap - MIMIC.minGap);
+}
+function mimicVanish() { if (Mim.st === 'vanish') return; Mim.st = 'vanish'; Mim.fadeT = 0; }
+function mimicExpose() {
+  Mim.st = 'exposed'; Mim.exT = 0; mimicHollowOut();
+  Aud.stinger(.9); scareFlash(false); Scare.shake = .5; mimicSpeak('shriek');
+  toast(Mim.self ? 'That was you… or something wearing you.' : 'That wasn’t ' + Mim.name + '.');
+}
+function mimicBite() {
+  mimicHollowOut(); Aud.stinger(1); scareFlash(true); Scare.shake = 1;
+  P.flickT = 4; P.stam = 0; P.exh = true;                       // your torch gutters and your legs give out
+  toast('It was never ' + (Mim.self ? 'you' : Mim.name) + '.'); mimicVanish();
+}
+
+function updateMimic(dt, t) {
+  mimicSync(); mimicVoiceFrame();
+  if (!world) return;
+  if (Mim.st === 'idle') {
+    if (!started || paused || P.escaped || !CFG.mimic || Scare.act) return;
+    Mim.t -= dt; if (Mim.t <= 0) mimicStart(); return;
+  }
+  if (!CFG.mimic || P.escaped) { mimicEnd(); return; }
+  if (paused) return;
+  const av = Mim.av; Mim.life += dt;
+  const dx = P.x - Mim.x, dz = P.z - Mim.z, dist = Math.hypot(dx, dz), los = mimicLOS(Mim.x, Mim.z, P.x, P.z);
+  const cosA = dist > .01 ? (-dx * -Math.sin(P.yaw) - dz * -Math.cos(P.yaw)) / dist : 1;      // 1 = you're looking straight at it
+  const watched = los && dist < 32 && cosA > .82, inBeam = P.flash && los && dist < MIMIC.exposeDist && cosA > .95;
+  // the real person it is wearing wandering close, or leaving, ruins the trick
+  if (Mim.targetId != null && (Mim.st === 'lure' || Mim.st === 'stalk')) {
+    const tr = remotes.get(Mim.targetId); if (!tr || Math.hypot(tr.x - Mim.x, tr.z - Mim.z) < 9) { mimicVanish(); }
+  }
+  if (Mim.life > MIMIC.life && (Mim.st === 'lure' || Mim.st === 'stalk')) mimicVanish();
+  let moving = false;
+
+  if (Mim.st === 'lure') {                                         // out of sight, calling in a borrowed voice
+    Mim.callT -= dt;
+    if (Mim.callT <= 0 && Mim.calls < MIMIC.lureCalls) { mimicSpeak(); Mim.calls++; Mim.callT = 4 + Math.random() * 3.5; }
+    else if (Mim.calls >= MIMIC.lureCalls && Mim.callT <= 0) Mim.st = 'stalk';
+    if (los && dist < 24) Mim.st = 'stalk';
+  } else if (Mim.st === 'stalk') {
+    Mim.callT -= dt; if (Mim.callT <= 0) { mimicSpeak(); Mim.callT = 7 + Math.random() * 5; }
+    Mim.expose = inBeam ? Mim.expose + dt : Math.max(0, Mim.expose - dt * .7);
+    if (Mim.expose > MIMIC.exposeS) mimicExpose();
+    else {
+      // weeping-angel rule: it freezes while your light is on it, creeps when you look without one, and rushes when you look away
+      const sp = (watched && P.flash) ? 0 : watched ? MIMIC.creepWatched : MIMIC.creep + Math.min(1.2, Mim.life * .02);
+      Mim.pathT -= dt; if (Mim.pathT <= 0) { Mim.pathT = .6; Mim.path = mimicPath(Mim.x, Mim.z, P.x, P.z); }
+      if (sp > 0) {
+        let tx = P.x, tz = P.z;
+        if (Mim.path && Mim.path.length) { const w = Mim.path[0]; tx = w.x; tz = w.z; if (Math.hypot(tx - Mim.x, tz - Mim.z) < .45) { Mim.path.shift(); } }
+        else if (Mim.path === null && !los) tx = Mim.x, tz = Mim.z;
+        const d = Math.hypot(tx - Mim.x, tz - Mim.z); if (d > .01) { const st = Math.min(d, sp * dt); Mim.x += (tx - Mim.x) / d * st; Mim.z += (tz - Mim.z) / d * st; moving = true; }
+      }
+      if (dist < MIMIC.biteR) mimicBite();
+    }
+  } else if (Mim.st === 'exposed') {
+    Mim.exT += dt; if (Mim.exT > 1.1) mimicVanish();
+  }
+  if (Mim.st === 'vanish') {
+    Mim.fadeT += dt; av.visible = Math.sin(Mim.fadeT * 70) > (Mim.fadeT - .3) * 2.2; if (Mim.fadeT > .8) { mimicEnd(); return; }
+  } else if (Mim.st === 'exposed') {
+    av.visible = Math.random() > .18;
+  }
+  // always turns to face you, and glides: its legs barely move
+  if (dist < 40 || Mim.st !== 'lure') Mim.ry += angDiff(Mim.ry, Math.atan2(-dx, -dz)) * (1 - Math.exp(-6 * dt));
+  av.position.set(Mim.x, 0, Mim.z); av.rotation.y = Mim.ry;
+  poseAvatar(av, moving ? .5 : 0, t, 0, Mim.st === 'exposed' ? true : Math.sin(t * 2.3 + Mim.life) > .985);
+  if (Mim.st !== 'exposed') { Mim.light.x = Mim.x; Mim.light.z = Mim.z; Mim.light.int = Mim.st === 'vanish' ? 0 : .3; }
+  // name tag stutters now and then
+  Mim.tagT -= dt;
+  if (Mim.tagT <= 0 && Mim.st !== 'exposed') {
+    const s = String(Mim.name).slice(0, 24), i = (Math.random() * s.length) | 0;
+    Mim.tag.userData.draw(s.slice(0, i) + pick(['▓', '?', '░', '█']) + s.slice(i + 1)); Mim.glitchT = .12; Mim.tagT = 2.5 + Math.random() * 4;
+  }
+  if (Mim.glitchT > 0) { Mim.glitchT -= dt; if (Mim.glitchT <= 0) Mim.tag.userData.draw(String(Mim.name).slice(0, 24)); }
+}
+// handy for testing: type summonMimic() in the browser console once you're in the maze
+window.summonMimic = function () { if (Mim.st !== 'idle') return 'already out there'; return mimicStart() ? 'it is coming' : 'no hiding place found, try again'; };
+  </script>
+</body>
+
+</html>
