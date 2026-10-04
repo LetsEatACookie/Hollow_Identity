@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - characters</title>
+</head>
+
+<body>
+  <!-- ALL ABOUT CHARACTERS: skins, perks, quirks, first/last names, roles, the avatar model + name tags, and the random identity roll.
+       index.html loads this file at start-up and runs the script below as part of the game. -->
+  <script>
+'use strict';
+// ---- identity data (everything here is rolled at random per player)
+const SKINS = [
+  { name: 'Mossback Ranger', body: 0x3f5b3a, accent: 0xd2a54a, skin: 0xd8a77c, hair: 0x2b1d14, acc: 'hat' },
+  { name: 'Lantern Monk', body: 0x8a3b2a, accent: 0xf0c070, skin: 0xb98a64, hair: 0x111111, acc: 'hood' },
+  { name: 'Rust Mechanic', body: 0x2f4f6a, accent: 0xe5792b, skin: 0xf0c9a0, hair: 0x5a3a1e, acc: 'goggles' },
+  { name: 'Moth Scholar', body: 0x5d4f86, accent: 0xd9d4ff, skin: 0xe6bfa0, hair: 0xcfcfd8, acc: 'wings' },
+  { name: 'Thorn Hunter', body: 0x4a2e2e, accent: 0x9bd16b, skin: 0x8d5a3b, hair: 0x1a0f0a, acc: 'antlers' },
+  { name: 'Bloom Medic', body: 0xe3e3da, accent: 0xff7aa8, skin: 0xf3d2b3, hair: 0x7a3b2a, acc: 'crown' },
+  { name: 'Night Janitor', body: 0x30363d, accent: 0xffd23f, skin: 0xc58c5f, hair: 0x222222, acc: 'helmet' },
+  { name: 'Glass Diver', body: 0x1f6f78, accent: 0x7ff3ff, skin: 0xa87654, hair: 0x0e0e0e, acc: 'diver' },
+  { name: 'Ash Courier', body: 0x77776f, accent: 0xff5a3c, skin: 0xe0b48a, hair: 0x333333, acc: 'pack' },
+  { name: 'Wisp Child', body: 0xcfd8c4, accent: 0x8dffb0, skin: 0xeedfcd, hair: 0x9fb59a, acc: 'mask' }
+];
+const PERKS = {
+  sprinter: { name: 'Sprinter', icon: '⚡', desc: 'Faster sprint and a bigger stamina pool.' },
+  nighteyes: { name: 'Night Eyes', icon: '👁', key: 'Q', desc: 'Toggle night-vision. Drains energy while on.' },
+  lantern: { name: 'Lantern Bearer', icon: '🔦', desc: 'Your flashlight is wider and brighter.' },
+  flares: { name: 'Flare Maker', icon: '🔥', key: 'G', desc: 'Throw 5 glowing flares the whole team can see.' },
+  breadcrumbs: { name: 'Petal Trail', icon: '🌸', desc: 'You leave a glowing petal trail for the team.' },
+  cartographer: { name: 'Cartographer', icon: '🗺', desc: 'Auto-mapping minimap of everywhere you explore.' },
+  beacon: { name: 'Beacon Caller', icon: '📡', key: 'E', desc: 'Fire a light-pillar ping the team sees anywhere.' },
+  wayfinder: { name: 'Wayfinder', icon: '🧭', desc: 'A faint arrow tugs you toward the way out.' },
+  warmsoul: { name: 'Warm Soul', icon: '🕯', desc: 'You glow softly, lighting up allies near you.' },
+  springheel: { name: 'Springheel', icon: '🦘', key: 'Space', desc: 'Jump very high — clear hedges and low walls.' },
+  secondwind: { name: 'Second Wind', icon: '💨', desc: 'Stamina regenerates twice as fast.' }
+};
+const QUIRKS = [
+  { id: 'nightblind', name: 'Night-Blind', desc: 'Your flashlight is dimmer.' },
+  { id: 'clumsy', name: 'Clumsy', desc: 'You walk a little slower.' },
+  { id: 'shortbreath', name: 'Short of Breath', desc: 'Smaller stamina pool.' },
+  { id: 'loud', name: 'Heavy Footed', desc: 'Your footsteps carry far.' },
+  { id: 'fearless', name: 'Fearless', desc: 'No downside… this time.' }
+];
+const FIRST = ['Mira', 'Odo', 'Juno', 'Tavi', 'Bram', 'Esme', 'Kellan', 'Ilsa', 'Rook', 'Wren', 'Dax', 'Sable', 'Orla', 'Fenn', 'Lio', 'Nyx', 'Hollis', 'Perrin', 'Zara', 'Cass', 'Tobin', 'Vesper', 'Marek', 'Linnea'];
+const LAST = ['Fernhollow', 'Quill', 'Ashgrove', 'Vale', 'Thistle', 'Mossgate', 'Underhill', 'Barrow', 'Larkspur', 'Nettle', 'Crowe', 'Willowmere', 'Dunmore', 'Hargrave'];
+const ROLES = ['night-shift botanist', 'lost cartographer', 'retired lighthouse keeper', 'grave-garden caretaker', 'runaway apprentice', 'insomniac locksmith', 'failed chef', 'storm-chaser', 'moth collector', 'sleepwalking poet', 'travelling dentist', 'ex-detective', 'seed smuggler', 'clockmaker'];
+
+const beamGeo = (() => { const g = new THREE.ConeGeometry(2.3, 9, 24, 1, true); g.translate(0, -4.5, 0); g.rotateX(Math.PI / 2); return g; })();
+function makeBeamMat(color) {
+  return new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(color) }, uI: { value: 1 } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    vertexShader: 'varying float vT;void main(){vT=clamp(-position.z/9.,0.,1.);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+    fragmentShader: 'uniform vec3 uColor;uniform float uI;varying float vT;void main(){float a=(1.-vT)*(1.-vT)*.13*uI;gl_FragColor=vec4(uColor,a);}'
+  });
+}
+function makeAvatar(sk) {
+  const g = new THREE.Group();
+  const std = (c, r = .8, e = 0, ec = 0) => LitMat({ color: c, roughness: r, emissive: ec || 0, emissiveIntensity: e });
+  const mB = std(sk.body), mA = std(sk.accent, .55, .15, sk.accent), mS = std(sk.skin, .7), mH = std(sk.hair, .9), mD = std(0x1b1b1b, .9);
+  const body = new THREE.Group(); g.add(body);
+  const legG = new THREE.CylinderGeometry(.095, .075, .74, 8); legG.translate(0, -.37, 0);
+  const legL = new THREE.Mesh(legG, mD), legR = new THREE.Mesh(legG, mD); legL.position.set(-.115, .8, 0); legR.position.set(.115, .8, 0); body.add(legL, legR);
+  const bootG = new THREE.BoxGeometry(.15, .1, .26); bootG.translate(0, -.72, -.04); legL.add(new THREE.Mesh(bootG, mA)); legR.add(new THREE.Mesh(bootG, mA));
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(.21, .18, .64, 10), mB); torso.position.y = 1.12; body.add(torso);
+  const belt = new THREE.Mesh(new THREE.CylinderGeometry(.19, .19, .07, 10), mA); belt.position.y = .86; body.add(belt);
+  const armG = new THREE.CylinderGeometry(.065, .055, .6, 8); armG.translate(0, -.3, 0);
+  const armL = new THREE.Mesh(armG, mB), armR = new THREE.Mesh(armG, mB); armL.position.set(-.29, 1.38, 0); armR.position.set(.29, 1.38, 0); body.add(armL, armR);
+  const handG = new THREE.SphereGeometry(.06, 8, 6); handG.translate(0, -.62, 0); armL.add(new THREE.Mesh(handG, mS)); armR.add(new THREE.Mesh(handG, mS));
+  armR.rotation.x = 1.25;
+  const head = new THREE.Group(); head.position.y = 1.6; body.add(head);
+  head.add(new THREE.Mesh(new THREE.SphereGeometry(.16, 16, 12), mS));
+  for (const s of [-1, 1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(.02, 6, 6), mD); e.position.set(s * .055, .02, -.145); head.add(e); }
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(.172, 14, 8, 0, Math.PI * 2, 0, Math.PI * .55), mH); hair.position.y = .012; hair.rotation.x = -.15; head.add(hair);
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, p = head) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); p.add(m); return m; };
+  switch (sk.acc) {
+    case 'hat': add(new THREE.CylinderGeometry(.3, .3, .02, 18), mA, 0, .12, 0); add(new THREE.CylinderGeometry(.14, .17, .15, 14), mB, 0, .2, 0); break;
+    case 'hood': {
+      const h = new THREE.Mesh(new THREE.SphereGeometry(.21, 14, 10, 5.2, 5.3, 0, Math.PI * .78), LitMat({ color: sk.body, roughness: .9, side: THREE.DoubleSide })); h.position.y = -.01; head.add(h);
+      add(new THREE.CylinderGeometry(.13, .3, .8, 10), mB, 0, 1.0, .12, .12, 0, 0, body); break;
+    }
+    case 'goggles': add(new THREE.TorusGeometry(.165, .014, 6, 22), mD, 0, .07, 0, Math.PI / 2);
+      for (const s of [-1, 1]) add(new THREE.CylinderGeometry(.05, .05, .04, 12), mA, s * .065, .08, -.155, Math.PI / 2); break;
+    case 'wings': for (const s of [-1, 1]) { const w = new THREE.Mesh(new THREE.PlaneGeometry(.75, .95), LitMat({ color: sk.accent, emissive: sk.accent, emissiveIntensity: .5, transparent: true, opacity: .5, side: THREE.DoubleSide, depthWrite: false })); w.position.set(s * .38, 1.22, .2); w.rotation.set(0, s * .7, s * .5); body.add(w); } break;
+    case 'antlers': { const am = std(0x6b5539, .9); for (const s of [-1, 1]) { add(new THREE.CylinderGeometry(.012, .02, .34, 5), am, s * .09, .22, 0, 0, 0, -s * .35); add(new THREE.CylinderGeometry(.008, .014, .2, 5), am, s * .17, .3, 0, 0, 0, -s * .9); add(new THREE.CylinderGeometry(.008, .014, .18, 5), am, s * .12, .38, 0, 0, 0, s * .2); } break; }
+    case 'crown': add(new THREE.TorusGeometry(.15, .018, 6, 20), mA, 0, .1, 0, Math.PI / 2);
+      for (let i = 0; i < 7; i++) { const a = i / 7 * 6.283; add(new THREE.SphereGeometry(.03, 6, 5), std([0xff7aa8, 0xffe27a, 0xffffff][i % 3], .6, .5, [0xff7aa8, 0xffe27a, 0xffffff][i % 3]), Math.cos(a) * .15, .11, Math.sin(a) * .15); } break;
+    case 'helmet': add(new THREE.SphereGeometry(.19, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), mA, 0, .03, 0);
+      add(new THREE.BoxGeometry(.08, .05, .05), new THREE.MeshBasicMaterial({ color: 0xfff4d0 }), 0, .12, -.18); break;
+    case 'diver': add(new THREE.SphereGeometry(.23, 16, 12), LitMat({ color: 0xaaf4ff, transparent: true, opacity: .22, roughness: .1, metalness: .3, depthWrite: false }), 0, 0, 0);
+      add(new THREE.TorusGeometry(.2, .04, 8, 20), mA, 0, -.17, 0, Math.PI / 2); break;
+    case 'pack': add(new THREE.BoxGeometry(.38, .5, .2), mA, 0, 1.15, .21, 0, 0, 0, body); add(new THREE.BoxGeometry(.3, .12, .18), mB, 0, 1.46, .21, 0, 0, 0, body); break;
+    case 'mask': add(new THREE.BoxGeometry(.25, .28, .03), std(0xf2f0e6, .5), 0, 0, -.16);
+      for (const s of [-1, 1]) add(new THREE.BoxGeometry(.05, .015, .02), new THREE.MeshBasicMaterial({ color: sk.accent }), s * .05, .03, -.18); break;
+  }
+  // flashlight in the right hand + beam
+  const torch = new THREE.Mesh(new THREE.CylinderGeometry(.035, .045, .22, 8), std(0x2a2a2a, .4)); torch.rotation.x = Math.PI / 2; torch.position.set(.29, 1.18, -.58); body.add(torch);
+  const lens = new THREE.Mesh(new THREE.CircleGeometry(.036, 10), new THREE.MeshBasicMaterial({ color: 0xfff6d8 })); lens.position.set(.29, 1.18, -.695); body.add(lens);
+  const beamPivot = new THREE.Group(); beamPivot.position.set(.29, 1.18, -.7); body.add(beamPivot);
+  const beam = new THREE.Mesh(beamGeo, makeBeamMat(0xfff0cc)); beam.frustumCulled = false; beamPivot.add(beam);
+  g.userData = { legL, legR, armL, armR, head, beamPivot, beam, lens };
+  return g;
+}
+function poseAvatar(av, speed, t, pitch, flash) {
+  const u = av.userData, a = Math.min(speed / 4, 1) * .8, s = Math.sin(t * (4 + speed * 1.1));
+  u.legL.rotation.x = s * a; u.legR.rotation.x = -s * a; u.armL.rotation.x = -s * a * .9;
+  u.armR.rotation.x = 1.25 + pitch * .6 + Math.abs(s) * a * .05;
+  u.head.rotation.x = pitch * .5; u.beamPivot.rotation.x = pitch;
+  u.beam.visible = flash; u.lens.visible = flash;
+}
+function nameSprite(txt, color) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64; const x = c.getContext('2d');
+  x.font = '600 28px Inter, system-ui, sans-serif'; x.textAlign = 'center'; x.shadowColor = '#000'; x.shadowBlur = 6;
+  x.fillStyle = '#' + new THREE.Color(color).getHexString(); x.fillText(txt, 128, 40);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+  s.scale.set(1.5, .375, 1); s.position.y = 2.0; return s;
+}
+
+// ---- identity roll + reveal
+function rollIdentity(takenSkins, takenNames) {
+  const all = SKINS.map((_, i) => i), free = all.filter(i => !takenSkins.has(i)), skin = pick(free.length ? free : all);
+  let name = ''; for (let k = 0; k < 30; k++) { name = pick(FIRST) + ' ' + pick(LAST); if (!takenNames.has(name)) break; }
+  const pk = shuffle(Object.keys(PERKS)).slice(0, Math.random() < .18 ? 3 : 2);
+  const q = Math.random() < .78 ? pick(QUIRKS.filter(x => x.id !== 'fearless')).id : 'fearless';
+  return { skin, name, role: pick(ROLES), pk, q };
+}
+let previewAv = null;
+function setPreview(i) { if (previewAv) scene.remove(previewAv); previewAv = makeAvatar(SKINS[i]); previewAv.position.set(9.5, 0, 48); scene.add(previewAv); }
+  </script>
+</body>
+
+</html>

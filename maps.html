@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - maps</title>
+</head>
+
+<body>
+  <!-- ALL ABOUT MAPS: world size constants, maze generation (same map for everyone from the room code), world/start-room/gate/sky building, and the minimap.
+       index.html loads this file at start-up and runs the script below as part of the game. -->
+  <script>
+'use strict';
+// ---- world constants
+const T = 3.2, WH = 4.4, GW = 41, GH = 31;
+
+// ---------- maze generation (deterministic from the room code) ----------
+function genWorld(R) {
+  const g = new Uint8Array(GW * GH).fill(1);         // 0 open · 1 wall · 2 hedge · 3 tree
+  const tt = new Uint8Array(GW * GH);                // 0 corridor · 1 start room · 2 grove · 3 garden · 4 exit
+  const I = (x, y) => y * GW + x, carve = (x, y) => { g[I(x, y)] = 0; };
+  for (let y = 13; y <= 17; y++)for (let x = 1; x <= 5; x++) { carve(x, y); tt[I(x, y)] = 1; }
+  for (let x = 6; x <= 8; x++)carve(x, 15);
+  const X0 = 9, vis = new Set([I(9, 15)]), st = [[9, 15]]; carve(9, 15);
+  while (st.length) {
+    const [cx, cy] = st[st.length - 1], nb = [];
+    for (const [dx, dy] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) { const nx = cx + dx, ny = cy + dy; if (nx >= X0 && nx <= GW - 2 && ny >= 1 && ny <= GH - 2 && !vis.has(I(nx, ny))) nb.push([nx, ny, dx, dy]); }
+    if (!nb.length) { st.pop(); continue; }
+    const [nx, ny, dx, dy] = nb[(R() * nb.length) | 0];
+    carve(cx + dx / 2, cy + dy / 2); carve(nx, ny); vis.add(I(nx, ny)); st.push([nx, ny]);
+  }
+  for (let y = 1; y < GH - 1; y++)for (let x = X0 + 1; x < GW - 1; x++) {
+    if (g[I(x, y)] !== 1 || R() >= .13) continue;
+    if (x % 2 === 0 && y % 2 === 1) { if (g[I(x - 1, y)] === 0 && g[I(x + 1, y)] === 0) carve(x, y); }
+    else if (x % 2 === 1 && y % 2 === 0) { if (g[I(x, y - 1)] === 0 && g[I(x, y + 1)] === 0) carve(x, y); }
+  }
+  const rooms = [];
+  const place = (x0, y0, w, h, type) => {
+    rooms.push({ x0, y0, w, h, type });
+    for (let y = y0; y < y0 + h; y++)for (let x = x0; x < x0 + w; x++) { carve(x, y); tt[I(x, y)] = type; }
+    const cxo = x0 + (w - 1) / 2, cyo = y0 + (h - 1) / 2;
+    if (type === 3 || type === 2) {
+      for (let oy = 1; oy < h - 1; oy += 2)for (let ox = 1; ox < w - 1; ox += 2) {
+        const x = x0 + ox, y = y0 + oy;
+        if (type === 3 && x === cxo && y === cyo) continue;
+        if (R() < (type === 3 ? .55 : .5)) g[I(x, y)] = (type === 3 ? 2 : 1);
+      }
+      if (type === 3) { const mx = Math.round(cxo), my = Math.round(cyo); g[I(mx, my)] = 3; }
+    }
+  };
+  const cand = []; for (let ex = 23; ex <= 35; ex += 2)for (let ey = 1; ey <= 25; ey += 2)cand.push([ex, ey]);
+  const [ex0, ey0] = cand[(R() * cand.length) | 0];
+  place(ex0, ey0, 5, 5, 4);                             // the way out
+  const sizes = [5, 5, 7, 5, 7];
+  for (let n = 0; n < 9; n++) {
+    const w = pick(sizes, R), h = pick(sizes, R);
+    for (let k = 0; k < 60; k++) {
+      const nx = Math.floor((GW - 1 - w - X0) / 2) + 1, ny = Math.floor((GH - 1 - h - 1) / 2) + 1;
+      const x0 = X0 + 2 * Math.floor(R() * nx), y0 = 1 + 2 * Math.floor(R() * ny);
+      let ok = x0 + w - 1 <= GW - 2 && y0 + h - 1 <= GH - 2;
+      for (const r of rooms) { if (x0 < r.x0 + r.w + 2 && x0 + w + 2 > r.x0 && y0 < r.y0 + r.h + 2 && y0 + h + 2 > r.y0) { ok = false; break; } }
+      if (ok) { place(x0, y0, w, h, R() < .45 ? 3 : 2); break; }
+    }
+  }
+  return { g, tt, rooms, R, exit: { x: (ex0 + 2.5) * T, z: (ey0 + 2.5) * T } };
+}
+
+function glowPoints(list, size, tex) {
+  const pos = new Float32Array(list.length * 3), col = new Float32Array(list.length * 3);
+  list.forEach((e, i) => { pos[i * 3] = e[0]; pos[i * 3 + 1] = e[1]; pos[i * 3 + 2] = e[2]; col[i * 3] = e[3]; col[i * 3 + 1] = e[4]; col[i * 3 + 2] = e[5]; });
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const m = new THREE.Points(geo, new THREE.PointsMaterial({ size, map: tex, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true }));
+  m.frustumCulled = false; return m;
+}
+const fireMat = () => new THREE.ShaderMaterial({
+  uniforms: { uTime, uTex: { value: A.tex.glow }, uPS: { value: 600 } },
+  vertexShader: `attribute float aPh;uniform float uTime;uniform float uPS;varying float vA;
+  void main(){vec3 p=position;p.x+=sin(uTime*.6+aPh*6.)*.9;p.y+=sin(uTime*.9+aPh*9.)*.35;p.z+=cos(uTime*.5+aPh*5.)*.9;
+  vec4 mv=modelViewMatrix*vec4(p,1.);gl_Position=projectionMatrix*mv;float d=-mv.z;
+  vA=smoothstep(34.,10.,d)*(.45+.55*sin(uTime*(1.5+aPh*2.)+aPh*20.));gl_PointSize=uPS/max(d,.5);}`,
+  fragmentShader: `uniform sampler2D uTex;varying float vA;void main(){vec4 t=texture2D(uTex,gl_PointCoord);gl_FragColor=vec4(vec3(.85,1.,.45)*t.rgb,t.a*vA);}`,
+  transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+});
+
+// ---------- build everything ----------
+function buildWorld(world, Q) {
+  const { g, tt, rooms } = world, R = world.R;
+  const root = new THREE.Group(); scene.add(root); world.root = root;
+  const I = (x, y) => y * GW + x, TC = (t) => (t + .5) * T;
+  const L = {}; for (const k of ['wall', 'hedge', 'fStone', 'fGrass', 'fMoss', 'ceil', 'ivy', 'vine', 'tuft', 'fern', 'leafy', 'bush', 'stem', 'bloom', 'mcap', 'mstem', 'trunk', 'canopy', 'lantB', 'lantC']) L[k] = new IL();
+  const glowS = [], glowL = [], fire = [];
+  const cnt = (x) => Math.floor(x * Q.dens + R());
+  const jit = (l, h, s) => { const v = l + R() * (h - l); return new THREE.Color(v, v * (1 + (R() - .5) * s), v * (1 - (R() - .5) * s)); };
+  const hsl = (h0, h1, s, l0, l1) => new THREE.Color().setHSL(h0 + R() * (h1 - h0), s, l0 + R() * (l1 - l0));
+  const FL = [0xff4fa0, 0x5ef2ff, 0xffd75a, 0xc58bff, 0xffffff, 0x7dffb0], MU = [0x44ffd5, 0xb06bff, 0xff6fb0, 0xffb040];
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const rot90 = () => Math.floor(R() * 4) * Math.PI / 2;
+  for (let ty = 0; ty < GH; ty++)for (let tx = 0; tx < GW; tx++) {
+    const v = g[I(tx, ty)], cx = TC(tx), cz = TC(ty);
+    if (v === 1) {
+      let ex = false;
+      for (let a = -1; a <= 1 && !ex; a++)for (let b = -1; b <= 1; b++) { const nx = tx + a, ny = ty + b; if (nx >= 0 && ny >= 0 && nx < GW && ny < GH && g[I(nx, ny)] !== 1) { ex = true; break; } }
+      if (ex) L.wall.add(cx, WH / 2, cz, 0, 1, 1, 1, jit(.72, 1, .06));
+      continue;
+    }
+    const tp = tt[I(tx, ty)], outdoor = (tp === 3 || tp === 4);
+    (outdoor ? L.fGrass : tp === 2 ? L.fMoss : L.fStone).add(cx, 0, cz, rot90(), 1, 1, 1, jit(.75, 1, .05));
+    if (v === 0 && !outdoor) L.ceil.add(cx, WH, cz, rot90(), 1, 1, 1, jit(.6, .9, .04));
+    if (v === 2) {
+      L.hedge.add(cx, .85, cz, 0, 1, 1, 1, jit(.7, 1, .1));
+      for (let k = 0; k < 5; k++)L.leafy.add(cx + (R() - .5) * T * .8, 1.55, cz + (R() - .5) * T * .8, R() * 6.28, 1.2, 1, 1.2, hsl(.25, .33, .5, .35, .6));
+      continue;
+    }
+    if (v === 3) {
+      L.trunk.add(cx, 0, cz, R() * 6.28, 1, 1, 1, null, (R() - .5) * .1, (R() - .5) * .1);
+      for (let k = 0; k < 7; k++) { const a = k / 7 * 6.28 + R(), r = .6 + R() * 1.6, s = 1.3 + R() * 1.1; L.canopy.add(cx + Math.cos(a) * r, 5 + R() * 2.4, cz + Math.sin(a) * r, R() * 6, s, s * .75, s, hsl(.38, .38, .46, .22, .4)); }
+      L.canopy.add(cx, 6.6, cz, 0, 2.2, 1.5, 2.2, hsl(.38, .38, .46, .22, .4));
+      for (let k = 0, n = Math.floor(8 * Q.dens); k < n; k++) { const a = R() * 6.28, r = .5 + R() * 2; L.vine.add(cx + Math.cos(a) * r, 5.2 + R(), cz + Math.sin(a) * r, R() * 6.28, 1, 1.2 + R() * .8, 1, hsl(.25, .35, .5, .35, .7)); }
+      for (let k = 0; k < 10; k++) { const a = R() * 6.28, r = .5 + R() * 2.2; glowS.push([cx + Math.cos(a) * r, 4.4 + R() * 2.6, cz + Math.sin(a) * r, 1, .85, .4]); }
+      continue;
+    }
+    const D = outdoor ? { gr: 14, fe: 2.6, fl: .55, mu: .12, fi: 5, bu: .18 } : tp === 2 ? { gr: 8, fe: 2.4, fl: .4, mu: .55, fi: 3, bu: .35 } : tp === 1 ? { gr: .3, fe: .12, fl: 0, mu: 0, fi: 0, bu: 0 } : { gr: 1.4, fe: .5, fl: .08, mu: .14, fi: .5, bu: .05 };
+    const rp = () => [cx + (R() - .5) * (T - .3), cz + (R() - .5) * (T - .3)];
+    for (let k = cnt(D.gr); k > 0; k--) { const [x, z] = rp(), s = .8 + R() * .9; L.tuft.add(x, 0, z, R() * 6.28, s, s * (.8 + R() * .8), s, hsl(.2, .33, .5, .4, .7)); }
+    for (let k = cnt(D.fe); k > 0; k--) { const [x, z] = rp(), s = .8 + R() * .9; L.fern.add(x, 0, z, R() * 6.28, s, s * (.8 + R() * .5), s, hsl(.24, .34, .5, .35, .7)); }
+    for (let k = cnt(D.bu); k > 0; k--) { const [x, z] = rp(), s = .5 + R() * .6; L.bush.add(x, .3 * s, z, R() * 6.28, s, s * .7, s, hsl(.27, .36, .4, .1, .22)); }
+    for (let k = cnt(D.fl); k > 0; k--) {
+      const c = FL[(R() * FL.length) | 0], cc = new THREE.Color(c), n = 1 + ((R() * 3) | 0), [x0, z0] = rp();
+      for (let j = 0; j < n; j++) { const x = x0 + (R() - .5) * .5, z = z0 + (R() - .5) * .5, h = .3 + R() * .6; L.stem.add(x, 0, z, 0, 1, h, 1); L.bloom.add(x, h, z, 0, 1, 1, 1, cc); glowS.push([x, h, z, cc.r, cc.g, cc.b]); }
+    }
+    for (let k = cnt(D.mu); k > 0; k--) {
+      const c = MU[(R() * MU.length) | 0], cc = new THREE.Color(c), m = 2 + ((R() * 4) | 0), [x0, z0] = rp();
+      for (let j = 0; j < m; j++) {
+        const x = x0 + (R() - .5) * .4, z = z0 + (R() - .5) * .4, h = .1 + R() * .25, r = .06 + R() * .1;
+        L.mstem.add(x, 0, z, 0, r * .5, h, r * .5); L.mcap.add(x, h, z, 0, r * 1.6, r, r * 1.6, cc); glowS.push([x, h + .06, z, cc.r * .8, cc.g * .8, cc.b * .8]);
+      }
+      if (R() < .22) LIGHTS.push({ x: x0, y: .5, z: z0, col: c, int: 1.0, d: 6.5, fl: .25, ph: R() * 10, w: 1 });
+    }
+    for (let k = cnt(D.fi); k > 0; k--)fire.push(cx + (R() - .5) * T, .5 + R() * 2.6, cz + (R() - .5) * T);
+    // walls around this tile
+    for (const [dx, dy] of DIRS) {
+      if (g[I(tx + dx, ty + dy)] !== 1) continue;
+      const th = Math.atan2(-dx, -dy), tX = Math.cos(th), tZ = -Math.sin(th), bx = cx + dx * (T / 2 - .03), bz = cz + dy * (T / 2 - .03);
+      const ivyN = tp === 2 ? 2.2 : outdoor ? 1.6 : tp === 1 ? .25 : .65, vineN = tp === 2 ? 3 : outdoor ? 2.2 : tp === 1 ? .4 : 1;
+      for (let k = cnt(ivyN); k > 0; k--) {
+        const u = (R() - .5) * (T - .5), y = .5 + R() * 3.4, s = 1.7 + R() * 1.5, o = .02 + R() * .06;
+        L.ivy.add(bx + tX * u - dx * o, y, bz + tZ * u - dy * o, th, s, s, s, hsl(.25, .36, .5, .5, .9), -.1 + (R() - .5) * .2, (R() - .5) * .8);
+      }
+      for (let k = cnt(vineN); k > 0; k--) {
+        const u = (R() - .5) * (T - .4), o = .05 + R() * .08;
+        L.vine.add(bx + tX * u - dx * o, WH - R() * .4, bz + tZ * u - dy * o, th, .9 + R() * .5, .7 + R() * 1.1, 1, hsl(.25, .35, .5, .4, .8));
+      }
+      const lr = tp === 1 ? 0 : (tp === 2 || outdoor) ? .06 : .035;
+      if (R() < lr) {
+        const rr = R(), col = rr < .78 ? 0xffb45a : rr < .92 ? 0x6fe6cf : 0xff7a5a, cc = new THREE.Color(col);
+        const lx = bx - dx * .14, lz = bz - dy * .14, ly = 2.25 + R() * .3;
+        L.lantB.add(lx, ly, lz, th); L.lantC.add(lx, ly, lz, th, 1, 1, 1, cc); glowL.push([lx, ly, lz, cc.r, cc.g, cc.b]);
+        LIGHTS.push({ x: lx, y: ly, z: lz, col, int: 2.1, d: 11, fl: .18, ph: R() * 10, w: 1 });
+      }
+    }
+    // hanging vines from the ceiling
+    if (v === 0 && !outdoor) {
+      for (let k = cnt(tp === 2 ? 3.2 : tp === 1 ? .2 : .7); k > 0; k--)L.vine.add(cx + (R() - .5) * (T - .4), WH - .05, cz + (R() - .5) * (T - .4), R() * 6.28, 1, .8 + R() * 1.1, 1, hsl(.25, .35, .5, .4, .8));
+    }
+  }
+  // garden & exit moonlight
+  for (const r of rooms) {
+    if (r.type !== 3 && r.type !== 4) continue;
+    const cx = (r.x0 + r.w / 2) * T, cz = (r.y0 + r.h / 2) * T;
+    LIGHTS.push({ x: cx, y: 6.5, z: cz, col: r.type === 4 ? 0x7dffc8 : 0x7da4ff, int: 1.55, d: r.w > 5 || r.h > 5 ? 25 : 21, fl: 0, ph: 0, w: 1.3 });
+  }
+  const mkI = (k, geo, mat) => L[k].build(geo, mat, root);
+  mkI('wall', G.wall, A.wall); mkI('hedge', G.hedge, A.hedge); mkI('fStone', G.floor, A.floorStone); mkI('fGrass', G.floor, A.floorGrass); mkI('fMoss', G.floor, A.floorMoss); mkI('ceil', G.ceil, A.ceil);
+  mkI('ivy', G.quad, A.ivy); mkI('vine', G.vine, A.vine); mkI('tuft', G.tuft, A.tuft); mkI('fern', G.fern, A.fern); mkI('leafy', G.leafy, A.leafy);
+  mkI('bush', G.bush, A.bush); mkI('stem', G.stem, A.stem); mkI('bloom', G.bloom, A.flower); mkI('mcap', G.mcap, A.mcap); mkI('mstem', G.mstem, A.mstem);
+  mkI('trunk', G.trunk, A.trunk); mkI('canopy', G.canopy, A.canopy); mkI('lantB', G.lantB, A.lantB); mkI('lantC', G.lantC, A.lantC);
+
+  // ---- special places: start room + exit gate
+  buildStartRoom(root, glowL, glowS);
+  buildGate(root, world, glowL);
+  if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
+  if (glowL.length) root.add(glowPoints(glowL, Q.glow * 2.2, A.tex.glow));
+  if (fire.length) {
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(fire, 3));
+    const ph = new Float32Array(fire.length / 3); for (let i = 0; i < ph.length; i++)ph[i] = R();
+    geo.setAttribute('aPh', new THREE.BufferAttribute(ph, 1));
+    const fp = new THREE.Points(geo, fireMat()); fp.frustumCulled = false; root.add(fp); world.fireMat = fp.material;
+  }
+  return world;
+}
+
+function buildStartRoom(root, glowL, glowS) {
+  const std = (c, r = .8) => LitMat({ color: c, roughness: r });
+  const box = (w, h, d, x, y, z, m, ry = 0) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.rotation.y = ry; root.add(b); return b; };
+  // corner lamp (NW corner of the starting room)
+  const lx = 1 * T + .75, lz = 13 * T + .75;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(.035, .05, 1.9, 8), std(0x222222, .5)); pole.position.set(lx, .95, lz); root.add(pole);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(.22, .26, .07, 12), std(0x222222, .5)); base.position.set(lx, .035, lz); root.add(base);
+  const shade = new THREE.Mesh(new THREE.ConeGeometry(.3, .28, 14, 1, true), LitMat({ color: 0x6a5a3a, roughness: .7, side: THREE.DoubleSide })); shade.position.set(lx, 2.0, lz); root.add(shade);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(.09, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffe2a8 })); bulb.position.set(lx, 1.9, lz); root.add(bulb);
+  glowL.push([lx, 1.9, lz, 1, .75, .4]);
+  LIGHTS.push({ id: 'lamp', x: lx + .1, y: 1.8, z: lz + .1, col: 0xffbe70, int: 2.9, d: 24, fl: .12, ph: 1.7, w: 3 });
+  // props
+  box(2.4, .08, 1.0, 3.2 * 3.2 + .2, .82, 13.9 * T, A.wood);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(.08, .8, .08, 3.2 * 3.2 + .2 + sx * 1.1, .4, 13.9 * T + sz * .4, A.wood);
+  box(.8, .8, .8, 5.1 * T, .4, 16.5 * T, A.wood, .4); box(.7, .7, .7, 5.1 * T + .2, 1.15, 16.5 * T, A.wood, .9); box(.9, .9, .9, 2 * T, .45, 16.6 * T, A.wood, .2); box(.6, .6, .6, 4.8 * T, .3, 13.3 * T, A.wood, .7);
+  box(1.9, .35, .85, 2.2 * T, .3, 14.4 * T - .1, std(0x3a3328, 1), 0);                                     // cot
+  box(1.5, .1, .7, 2.2 * T - .1, .52, 14.4 * T - .1, std(0x56604a, 1), 0);
+  // door frame between the room and the hallway
+  const dx = 6 * T + .15, dz = 15.5 * T;
+  box(.25, 3.4, .25, dx, 1.7, dz - T / 2 + .1, A.wood); box(.25, 3.4, .25, dx, 1.7, dz + T / 2 - .1, A.wood); box(.3, .3, T, dx, 3.4, dz, A.wood);
+  box(.08, 3.1, 1.5, dx - .3, 1.55, dz - T / 2 + .95, A.wood, -.9);                                         // door left ajar
+  // lantern right outside the door, so the way is faintly lit
+  const hx = 8 * T + .4, hz = 15.5 * T - T / 2 + .2;
+  box(.2, .34, .2, hx, 2.3, hz, std(0x1a1a18, .5));
+  const hb = new THREE.Mesh(new THREE.BoxGeometry(.12, .22, .12), new THREE.MeshBasicMaterial({ color: 0xffc27a })); hb.position.set(hx, 2.3, hz); root.add(hb);
+  glowL.push([hx, 2.3, hz, 1, .72, .4]);
+  LIGHTS.push({ x: hx, y: 2.2, z: hz + .1, col: 0xffb45a, int: 1.8, d: 10, fl: .2, ph: 3, w: 1.5 });
+}
+
+function buildGate(root, world, glowL) {
+  const gx = world.exit.x, gz = world.exit.z;
+  const stone = LitMat({ color: 0x6d7a68, map: A.tex.wall, roughness: .9 });
+  const grp = new THREE.Group(); grp.position.set(gx, 0, gz); root.add(grp);
+  for (const s of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(.55, 2.6, .55), stone); p.position.set(0, 1.3, s * 1.65); grp.add(p); }
+  const arch = new THREE.Mesh(new THREE.TorusGeometry(1.65, .28, 8, 28, Math.PI), stone); arch.rotation.y = Math.PI / 2; arch.position.y = 2.6; grp.add(arch);
+  const portalMat = new THREE.ShaderMaterial({
+    uniforms: { uTime }, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+    fragmentShader: `varying vec2 vUv;uniform float uTime;
+    void main(){vec2 p=(vUv-.5)*vec2(1.,1.3);float r=length(p);float a=atan(p.y,p.x);
+    float w=.5+.5*sin(a*5.+uTime*1.4-r*18.);float rings=.5+.5*sin(r*22.-uTime*3.);
+    float mask=smoothstep(.55,.15,r);vec3 c=mix(vec3(.1,.6,.5),vec3(.6,1.,.8),w*rings);
+    gl_FragColor=vec4(c*mask*(.7+.5*w),mask*.8);}`});
+  const portal = new THREE.Mesh(new THREE.PlaneGeometry(3.3, 4.6), portalMat); portal.rotation.y = Math.PI / 2; portal.position.y = 2.3; grp.add(portal);
+  glowL.push([gx, 2.2, gz, .4, 1, .8]);
+  LIGHTS.push({ id: 'gate', x: gx, y: 2.3, z: gz, col: 0x66ffc8, int: 2.6, d: 18, fl: .1, ph: 2, w: 3 });
+  // sign
+  const c = document.createElement('canvas'); c.width = 512; c.height = 96; const x = c.getContext('2d');
+  x.font = '600 54px Cinzel, Georgia, serif'; x.textAlign = 'center'; x.fillStyle = 'rgba(170,255,225,0.95)'; x.shadowColor = '#4dffc0'; x.shadowBlur = 18; x.fillText('THE WAY OUT', 256, 64);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  sp.scale.set(4, .75, 1); sp.position.set(0, 4.2, 0); grp.add(sp);
+}
+
+function buildSky() {
+  const n = 1400, p = new Float32Array(n * 3), c = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { const u = Math.random() * 6.283, v = Math.random() * .9 + .1, r = 400, s = Math.sqrt(1 - v * v); p[i * 3] = Math.cos(u) * s * r; p[i * 3 + 1] = v * r; p[i * 3 + 2] = Math.sin(u) * s * r; const b = .4 + Math.random() * .6; c[i * 3] = b; c[i * 3 + 1] = b; c[i * 3 + 2] = b * (.9 + Math.random() * .1); }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(p, 3)); geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  const stars = new THREE.Points(geo, new THREE.PointsMaterial({ size: 1.8, sizeAttenuation: false, vertexColors: true, fog: false, transparent: true, opacity: .9, depthWrite: false }));
+  stars.frustumCulled = false; stars.renderOrder = -2; scene.add(stars);
+  const mc = document.createElement('canvas'); mc.width = mc.height = 256; const x = mc.getContext('2d');
+  const g = x.createRadialGradient(128, 128, 0, 128, 128, 128); g.addColorStop(0, 'rgba(220,235,255,1)'); g.addColorStop(.18, 'rgba(210,228,255,.95)'); g.addColorStop(.22, 'rgba(160,190,255,.35)'); g.addColorStop(1, 'rgba(120,160,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 256, 256);
+  const moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(mc), fog: false, transparent: true, depthWrite: false }));
+  moon.scale.set(90, 90, 1); moon.position.set(-160, 250, -220); moon.renderOrder = -1; scene.add(moon);
+  return stars;
+}
+
+function drawMap() {
+  const c = $('#mm'), x = c.getContext('2d'), s = 5; x.fillStyle = '#070b09'; x.fillRect(0, 0, c.width, c.height);
+  for (let ty = 0; ty < GH; ty++)for (let tx = 0; tx < GW; tx++) {
+    if (!explored[ty * GW + tx]) continue; const v = world.g[ty * GW + tx], tp = world.tt[ty * GW + tx];
+    x.fillStyle = v === 1 ? '#161d18' : v === 2 ? '#1f4a2a' : v === 3 ? '#2d6b3d' : tp === 4 ? '#35d6a0' : tp === 3 ? '#2a5a38' : tp === 2 ? '#344a2c' : tp === 1 ? '#4a4435' : '#3a463d';
+    x.fillRect(tx * s, ty * s, s, s);
+  }
+  if (explored[Math.floor(world.exit.z / T) * GW + Math.floor(world.exit.x / T)]) { x.fillStyle = '#6dffd0'; x.beginPath(); x.arc(world.exit.x / T * s, world.exit.z / T * s, 3.5, 0, 7); x.fill(); }
+  for (const r of remotes.values()) { x.fillStyle = '#' + new THREE.Color(r.sk.accent).getHexString(); x.beginPath(); x.arc(r.x / T * s, r.z / T * s, 2.6, 0, 7); x.fill(); }
+  x.save(); x.translate(P.x / T * s, P.z / T * s); x.rotate(-P.yaw); x.fillStyle = '#fff'; x.beginPath(); x.moveTo(0, -5); x.lineTo(3.5, 3.5); x.lineTo(-3.5, 3.5); x.closePath(); x.fill(); x.restore();
+}
+  </script>
+</body>
+
+</html>
