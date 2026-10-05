@@ -17,10 +17,11 @@
 'use strict';
 // ---------- tuning ----------
 const DOOR = {
-  rooms: 8,             // how many closed-off door rooms to add per level in the library / castle (fewer if there is no space)
-  gardenRooms: 5,       // same for the garden (it is a much smaller map)
-  sizes: [3, 3, 5],     // room width / depth in tiles (odd only; picked at random, so mostly small closets)
-  tries: 400,           // placement attempts before giving up
+  rooms: 10,            // how many closed-off door rooms to add per level in the library / castle (fewer if there is no space)
+  gardenRooms: 6,       // same for the garden (it is a much smaller map)
+  sizes: [3, 5, 5, 7],  // room width / depth in tiles (odd only; picked at random)
+  gardenSizes: [3, 5, 5],
+  tries: 700,           // placement attempts before giving up
   chanceOpen: 0,        // chance a door starts the level open (0 = every door room starts shut)
   reach: 3.6,           // how close you must be (world units; one tile is 3.2)
   cone: .5,             // how directly you must face it (1 = dead centre, 0 = 90 degrees off)
@@ -34,7 +35,7 @@ const DR = { mine: new Map(), seen: new Map(), cur: null, el: null, scanT: 0, la
 // A room is only kept if every open tile of the level can still be reached from the start (so a door room can never cut the maze in two).
 // opts: { sx, sy (a tile everyone can reach, the maze start), minX (first allowed column), count (how many rooms), obst: [g, kd] (what the table-spots become) }
 function doorsGen(g, tt, kd, rooms, W, H, R, opts) {
-  const { sx, sy, minX, count, obst } = opts;
+  const { sx, sy, minX, count, obst } = opts, SZ = opts.sizes || DOOR.sizes;
   const I = (x, y) => y * W + x, list = [], dm = new Uint8Array(W * H);
   const seen = new Uint8Array(W * H), q = new Int32Array(W * H), start = I(sx, sy);
   const connected = () => {                                   // can every open tile be reached from the start?
@@ -49,11 +50,11 @@ function doorsGen(g, tt, kd, rooms, W, H, R, opts) {
   };
   const SIDES = [[-1, 0], [1, 0], [0, -1], [0, 1]];
   for (let k = 0; k < DOOR.tries && list.length < count; k++) {
-    const w = DOOR.sizes[(R() * DOOR.sizes.length) | 0], h = DOOR.sizes[(R() * DOOR.sizes.length) | 0];
+    const w = SZ[(R() * SZ.length) | 0], h = SZ[(R() * SZ.length) | 0];
     const nx = Math.floor((W - 1 - w - minX) / 2) + 1, ny = Math.floor((H - 1 - h - 1) / 2) + 1;
     const x0 = minX + 2 * Math.floor(R() * nx), y0 = 1 + 2 * Math.floor(R() * ny);          // odd-aligned, like every other room
     if (x0 < minX || y0 < 1 || x0 + w - 1 > W - 2 || y0 + h - 1 > H - 2) continue;
-    if (rooms.some(r => x0 < r.x0 + r.w + 3 && x0 + w + 3 > r.x0 && y0 < r.y0 + r.h + 3 && y0 + h + 3 > r.y0)) continue;
+    if (rooms.some(r => { const m = r.vault ? 3 : 2; return x0 < r.x0 + r.w + m && x0 + w + m > r.x0 && y0 < r.y0 + r.h + m && y0 + h + m > r.y0; })) continue;
     // pick the side for the door (random order); the door tile sits in the wall ring, the tile just outside it must be open corridor
     const order = SIDES.slice().sort(() => R() - .5); let door = null;
     for (const [ox, oz] of order) {
@@ -81,7 +82,7 @@ function doorsGen(g, tt, kd, rooms, W, H, R, opts) {
     list.push({ id: list.length, tx: door.tx, ty: door.ty, ox: door.ox, oz: door.oz, flip: R() < .5 ? 1 : -1, open0: R() < DOOR.chanceOpen, room: { x0, y0, w, h } });
   }
   for (const d of list) if (!d.open0) dm[I(d.tx, d.ty)] = 1;                                  // 1 = a closed door stands on this tile
-  return { list, dm };
+  return { list, dm, items: itemsGen(g, list, W, R) };      // the pickups that lie in those rooms (see items.html)
 }
 
 // ---------- meshes ----------
@@ -94,7 +95,7 @@ function doorsBuild(root, world, style) {
   const gTrim = mergeGeos([
     bx(PW, .16, .2, PW / 2, .6, 0), bx(PW, .16, .2, PW / 2, DH - .6, 0), bx(.4, .3, .22, .2, .6, 0), bx(.4, .3, .22, .2, DH - .6, 0),
     new THREE.TorusGeometry(.11, .028, 6, 12).translate(PW - .35, 1.5, .13), new THREE.TorusGeometry(.11, .028, 6, 12).translate(PW - .35, 1.5, -.13), bx(.14, .14, .3, PW - .35, 1.62, 0)]);
-  for (const d of ds) if (d.room && typeof LIGHTS !== 'undefined') LIGHTS.push({ x: (d.room.x0 + d.room.w / 2) * T, y: 2.4, z: (d.room.y0 + d.room.h / 2) * T, col: 0xffb45a, int: 1.4, d: 9, fl: .3, ph: d.id * 1.7, w: 1.2 });   // a little light inside each door room
+  for (const d of ds) if (d.room && typeof LIGHTS !== 'undefined') LIGHTS.push({ x: (d.room.x0 + d.room.w / 2) * T, y: 2.4, z: (d.room.y0 + d.room.h / 2) * T, col: 0xffb45a, int: 1.4, d: 6 + Math.max(d.room.w, d.room.h) * 1.4, fl: .3, ph: d.id * 1.7, w: 1.2 });   // a little light inside each door room
   world.doorObjs = ds.map((d) => {
     const cx = (d.tx + .5) * T, cz = (d.ty + .5) * T;
     const sx = d.ox ? 0 : d.flip, sz = d.ox ? d.flip : 0;                  // direction the closed panel spans from its hinge
@@ -176,6 +177,7 @@ function updateDoors(dt) {
   if (!DR.el) {
     const e = DR.el = document.createElement('div');
     e.style.cssText = 'position:fixed;left:50%;bottom:27%;transform:translateX(-50%);z-index:20;pointer-events:none;opacity:0;transition:opacity .15s;padding:7px 16px;border-radius:8px;background:rgba(0,0,0,.5);color:#e8efe6;font:600 14px Inter,sans-serif;letter-spacing:.14em;text-transform:uppercase;text-shadow:0 1px 4px #000';
+    e.addEventListener('touchstart', (ev) => { ev.preventDefault(); doorInteract(); }, { passive: false }); if (isTouch) e.style.pointerEvents = 'auto';
     document.body.appendChild(e);
   }
   const tg = doorTarget(); DR.cur = tg;

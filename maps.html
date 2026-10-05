@@ -68,7 +68,7 @@ function genWorld(R) {
     sites.push({ tx: got[0], ty: got[1], x: (got[0] + 2.5) * T, z: (got[1] + 2.5) * T });
   }
   const sizes = [5, 5, 7, 5, 7];
-  for (let n = 0; n < 9; n++) {
+  for (let n = 0; n < 6; n++) {            // open groves / gardens (the other rooms are the door rooms, see doors.html)
     const w = pick(sizes, R), h = pick(sizes, R);
     for (let k = 0; k < 60; k++) {
       const nx = Math.floor((GW - 1 - w - X0) / 2) + 1, ny = Math.floor((GH - 1 - h - 1) / 2) + 1;
@@ -78,8 +78,8 @@ function genWorld(R) {
       if (ok) { place(x0, y0, w, h, R() < .45 ? 3 : 2); break; }
     }
   }
-  const dd = doorsGen(g, tt, new Uint8Array(GW * GH), rooms, GW, GH, R, { sx: 9, sy: 15, minX: 11, count: DOOR.gardenRooms, obst: [2, 0] });   // closed-off rooms with a door (see doors.html); hedges inside
-  return { g, tt, rooms, R, sites, exit: sites[0], doors: dd.list, dm: dd.dm };
+  const dd = doorsGen(g, tt, new Uint8Array(GW * GH), rooms, GW, GH, R, { sx: 9, sy: 15, minX: 11, count: DOOR.gardenRooms, sizes: DOOR.gardenSizes, obst: [2, 0] });   // closed-off rooms with a door (see doors.html); hedges inside
+  return { g, tt, rooms, R, sites, exit: sites[0], doors: dd.list, dm: dd.dm, items: dd.items };
 }
 
 function glowPoints(list, size, tex) {
@@ -195,7 +195,7 @@ function buildWorld(world, Q) {
 
   // ---- special places: start room + exit gate + the door rooms
   buildStartRoom(root, glowL, glowS);
-  doorsBuild(root, world, { wood: 0x5a4a36, band: 0x2a3a2a });
+  doorsBuild(root, world, { wood: 0x5a4a36, band: 0x2a3a2a }); itemsBuild(root, world);
   buildGates(root, world);
   world.scares = findScareSpots(world);
   if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));

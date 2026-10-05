@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - Items & hotbar</title>
+</head>
+
+<body>
+  <!-- ALL ABOUT ITEMS: which items sit in which door room (generation), the little floating 3D pickups, picking them up with E,
+       the HOTBAR (bottom centre, 5 slots) and what each item does when you use it. index.html loads this file at start-up and runs the script below.
+       Used by: doorsGen calls itemsGen (items only ever spawn inside door rooms), the three builders (buildWorld / libBuild / casBuild) call itemsBuild,
+       the game loop calls updateItems, the E key calls itemInteract (before doors and the beacon), library.html calls itemsReset on every new level.
+       Controls: E pick up · 1-5 select a slot · mouse wheel cycles slots · left click or R uses the selected item (touch: tap a slot to select, tap it again to use).
+       Multiplayer: every item you pick up is published in your presence key "it", so it disappears for everyone. Your hotbar is your own. -->
+  <script>
+'use strict';
+// ---------- tuning ----------
+const ITEM = {
+  slots: 5,            // hotbar size
+  stack: 4,            // how many of one item fit in a slot
+  reach: 3.4,          // how close you must be to pick something up (world units; one tile is 3.2)
+  cone: .3,            // how directly you must face it (1 = dead centre, 0 = 90 degrees off) - ignored when you are standing right on it
+  medHeal: 50,         // health a medkit gives
+  types: {             // w = how common it is inside the rooms
+    battery: { name: 'Battery', icon: '🔋', col: 0x7dff9a, w: 3, tip: 'fixes a failing flashlight' },
+    medkit: { name: 'Medkit', icon: '🩹', col: 0xff6a6a, w: 2, tip: 'heals you' },
+    flare: { name: 'Flare', icon: '🔥', col: 0xff9a4a, w: 3, tip: 'throws a flare' },
+    drink: { name: 'Energy drink', icon: '🥤', col: 0x5ec8ff, w: 2, tip: 'refills your stamina' }
+  }
+};
+// your inventory: slots[i] = null or { t: 'battery', n: 2 }
+const INV = { slots: new Array(ITEM.slots).fill(null), sel: 0, mine: new Map(), seen: new Map(), el: null, slotEls: [], nameEl: null, promptEl: null, scanT: 0, lastPrompt: '', touchTap: 0 };
+
+// ---------- generation (deterministic: called at the end of doorsGen with the level's own rng) ----------
+function itemsGen(g, vaults, W, R) {
+  const kinds = Object.keys(ITEM.types), tot = kinds.reduce((a, k) => a + ITEM.types[k].w, 0), out = [];
+  for (const v of vaults) {
+    const r = v.room, free = [];
+    for (let y = r.y0; y < r.y0 + r.h; y++)for (let x = r.x0; x < r.x0 + r.w; x++) {
+      if (g[y * W + x] !== 0) continue;                      // tables / hedges
+      if (x === v.tx - v.ox && y === v.ty - v.oz) continue;  // the tile right behind the door stays clear
+      free.push([x, y]);
+    }
+    let n = 1 + (r.w * r.h >= 15 ? 1 : 0) + (R() < .5 ? 1 : 0);
+    n = Math.min(n, free.length);
+    for (let i = 0; i < n; i++) {
+      const [x, y] = free.splice((R() * free.length) | 0, 1)[0];
+      let roll = R() * tot, t = kinds[0]; for (const k of kinds) { roll -= ITEM.types[k].w; if (roll <= 0) { t = k; break; } }
+      out.push({ id: out.length, t, tx: x, ty: y, dx: (R() - .5) * 1.4, dz: (R() - .5) * 1.4 });
+    }
+  }
+  return out;
+}
+
+// ---------- meshes ----------
+function itemsBuild(root, world) {
+  const list = world.items || [], T3 = 3.2;
+  world.itemObjs = [];
+  const geo = {
+    battery: [new THREE.CylinderGeometry(.075, .075, .26, 10), new THREE.CylinderGeometry(.035, .035, .05, 8)],
+    medkit: [new THREE.BoxGeometry(.32, .2, .13), new THREE.BoxGeometry(.2, .05, .14), new THREE.BoxGeometry(.05, .15, .14)],
+    flare: [new THREE.CylinderGeometry(.04, .04, .3, 8), new THREE.CylinderGeometry(.05, .05, .05, 8)],
+    drink: [new THREE.CylinderGeometry(.065, .065, .22, 10), new THREE.CylinderGeometry(.05, .05, .03, 10)]
+  };
+  const mat = (c) => new THREE.MeshBasicMaterial({ color: c });
+  const body = {}, trim = {};
+  for (const k in ITEM.types) { const c = new THREE.Color(ITEM.types[k].col); body[k] = mat(c.clone().multiplyScalar(.85)); trim[k] = mat(k === 'medkit' ? 0xffffff : 0x2a2a2a); }
+  const white = mat(0xf2f2f2);
+  for (const it of list) {
+    const grp = new THREE.Group(), G = geo[it.t], col = ITEM.types[it.t].col;
+    if (it.t === 'medkit') { grp.add(new THREE.Mesh(G[0], white)); const a = new THREE.Mesh(G[1], body.medkit), b = new THREE.Mesh(G[2], body.medkit); a.position.z = b.position.z = .005; grp.add(a, b); }
+    else { grp.add(new THREE.Mesh(G[0], body[it.t])); const cap = new THREE.Mesh(G[1], it.t === 'flare' ? mat(0xffe9a0) : trim[it.t]); cap.position.y = G[0].parameters.height / 2 + .02; grp.add(cap); }
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: A.tex.glow, color: col, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity: .8 }));
+    glow.scale.set(1.5, 1.5, 1); grp.add(glow);
+    const x = (it.tx + .5) * T3 + it.dx, z = (it.ty + .5) * T3 + it.dz;
+    grp.position.set(x, .9, z); root.add(grp);
+    world.itemObjs.push({ id: it.id, t: it.t, x, z, grp, ph: it.id * 1.9, taken: false });
+  }
+}
+
+// ---------- inventory ----------
+function itemAdd(t) {
+  let s = INV.slots.findIndex(q => q && q.t === t && q.n < ITEM.stack);
+  if (s < 0) s = INV.slots.findIndex(q => !q);
+  if (s < 0) return false;
+  if (INV.slots[s]) INV.slots[s].n++; else INV.slots[s] = { t, n: 1 };
+  if (!INV.slots[INV.sel]) INV.sel = s;
+  itemsHud(); return true;
+}
+function itemSelect(i) { INV.sel = ((i % ITEM.slots) + ITEM.slots) % ITEM.slots; itemsHud(); }
+function itemsPublish() {
+  const e = []; for (const [id, ts] of INV.mine) e.push(id.toString(36) + '.' + ts.toString(36));
+  net.set({ it: LV + ';' + e.join(',') });
+}
+function itemsReset() { INV.mine.clear(); INV.seen.clear(); if (netOn) net.set({ it: LV + ';' }); }
+
+function itemTarget() {
+  const os = world && world.itemObjs; if (!os || P.down > 0 || P.freeze || paused) return null;
+  const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw); let best = null, bs = -9;
+  for (const o of os) {
+    if (o.taken) continue;
+    const dx = o.x - P.x, dz = o.z - P.z, dist = Math.hypot(dx, dz); if (dist > ITEM.reach) continue;
+    const dot = dist < 1.1 ? 1 : (dx * fx + dz * fz) / dist; if (dot < ITEM.cone) continue;
+    const s = dot * 2 - dist * .3; if (s > bs) { best = o; bs = s; }
+  }
+  return best;
+}
+// called from the E key (before doors and the beacon): returns true if an item took the keypress
+function itemInteract() {
+  const o = itemTarget(); if (!o) return false;
+  if (!itemAdd(o.t)) { toast('Hotbar full'); return true; }
+  o.taken = true; o.grp.visible = false; INV.mine.set(o.id, Date.now()); itemsPublish();
+  Aud.tone(520, 980, .14, .1, 'triangle'); toast('+ ' + ITEM.types[o.t].icon + ' ' + ITEM.types[o.t].name);
+  return true;
+}
+
+// ---------- using items ----------
+function itemUse() {
+  const s = INV.slots[INV.sel]; if (!s || !started || paused || P.down > 0 || P.freeze) return false;
+  let ok = false;
+  if (s.t === 'battery') {
+    if (Torch.fault) {
+      const wasDead = Torch.dead; if (wasDead) P.flickT = .7;
+      Torch.fault = false; Torch.dead = false; Torch.prog = 0; Torch.ft = 0; if (wasDead) Torch.k = 0;
+      Torch.next = TORCH.maxGap; ok = true; toast('Fresh battery - the flashlight is bright again');
+    } else if (Torch.next < TORCH.minGap) { Torch.next = TORCH.maxGap; ok = true; toast('Fresh battery - the flashlight will hold for a while'); }
+    else toast('The flashlight is fine for now');
+    if (ok) { Aud.tone(1500, 900, .08, .12, 'square'); setTimeout(() => Aud.tone(900, 1300, .1, .08), 90); }
+  } else if (s.t === 'medkit') {
+    if (P.hp >= HEALTH.max) toast('You are already at full health');
+    else { P.hp = Math.min(HEALTH.max, P.hp + ITEM.medHeal); ok = true; Aud.tone(330, 660, .35, .09, 'sine'); toast('+' + ITEM.medHeal + ' health'); }
+  } else if (s.t === 'drink') {
+    const max = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1);
+    if (P.stam >= max - 1 && !P.exh) toast('You are not tired yet');
+    else { P.stam = max; P.exh = false; ok = true; Aud.burst(2200, .12, .08, 2); toast('Stamina restored'); }
+  } else if (s.t === 'flare') {
+    ok = launchFlare();
+  }
+  if (!ok) return false;
+  if (--s.n <= 0) INV.slots[INV.sel] = null;
+  itemsHud(); return true;
+}
+
+// ---------- hotbar + prompt ----------
+function itemsUI() {
+  if (INV.el) return;
+  const st = document.createElement('style');
+  st.textContent = '#hotbar{position:absolute;left:50%;bottom:calc(14px + var(--sab));transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;z-index:11}'
+    + '#hotbar .hbRow{display:flex;gap:6px}'
+    + '#hotbar .hbs{position:relative;width:54px;height:54px;border-radius:10px;background:var(--glass);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:25px;pointer-events:auto;cursor:pointer;transition:transform .1s,border-color .1s,box-shadow .1s}'
+    + '#hotbar .hbs.sel{border-color:#ffc27a;box-shadow:0 0 0 1px #ffc27a,0 0 14px rgba(255,194,122,.35);transform:translateY(-4px)}'
+    + '#hotbar .hbs i{position:absolute;top:3px;left:6px;font:600 10px Inter,sans-serif;font-style:normal;color:var(--mute)}'
+    + '#hotbar .hbs em{position:absolute;right:5px;bottom:2px;font:700 12px Inter,sans-serif;font-style:normal;color:#fff}'
+    + '#hotbar .hbN{font:600 12px Inter,sans-serif;letter-spacing:.08em;color:#e8efe6;min-height:16px;text-shadow:0 1px 6px #000}'
+    + '#hint{bottom:calc(84px + var(--sab)) !important}';
+  document.head.appendChild(st);
+  const hb = INV.el = document.createElement('div'); hb.id = 'hotbar';
+  const nm = INV.nameEl = document.createElement('div'); nm.className = 'hbN'; hb.appendChild(nm);
+  const row = document.createElement('div'); row.className = 'hbRow'; hb.appendChild(row);
+  for (let i = 0; i < ITEM.slots; i++) {
+    const d = document.createElement('div'); d.className = 'hbs'; d.innerHTML = '<i>' + (i + 1) + '</i><b></b><em></em>'; row.appendChild(d); INV.slotEls.push(d);
+    const tap = (e) => { e.preventDefault(); if (INV.sel === i) itemUse(); else itemSelect(i); };
+    d.addEventListener('touchstart', tap, { passive: false }); d.addEventListener('mousedown', (e) => { if (!document.pointerLockElement) tap(e); });
+  }
+  (document.getElementById('hud') || document.body).appendChild(hb);
+  const pr = INV.promptEl = document.createElement('div');
+  pr.style.cssText = 'position:fixed;left:50%;bottom:33%;transform:translateX(-50%);z-index:20;pointer-events:none;opacity:0;transition:opacity .15s;padding:7px 16px;border-radius:8px;background:rgba(0,0,0,.5);color:#e8efe6;font:600 14px Inter,sans-serif;letter-spacing:.14em;text-transform:uppercase;text-shadow:0 1px 6px #000;white-space:nowrap';
+  pr.addEventListener('touchstart', (e) => { e.preventDefault(); itemInteract(); }, { passive: false });
+  document.body.appendChild(pr);
+  itemsHud();
+}
+function itemsHud() {
+  if (!INV.el) return;
+  INV.slotEls.forEach((d, i) => {
+    const s = INV.slots[i]; d.classList.toggle('sel', i === INV.sel);
+    d.children[1].textContent = s ? ITEM.types[s.t].icon : ''; d.children[2].textContent = s && s.n > 1 ? s.n : '';
+  });
+  const s = INV.slots[INV.sel];
+  INV.nameEl.textContent = s ? ITEM.types[s.t].name + ' - ' + ITEM.types[s.t].tip + (isTouch ? ' (tap again)' : ' (click / R)') : '';
+}
+
+// ---------- per frame ----------
+function updateItems(dt, t) {
+  itemsUI();
+  const os = world && world.itemObjs;
+  if (os) {
+    for (const o of os) {
+      if (o.taken) continue;
+      const near = Math.abs(P.x - o.x) < 44 && Math.abs(P.z - o.z) < 44; o.grp.visible = near;
+      if (near) { o.grp.rotation.y = t * 1.3 + o.ph; o.grp.position.y = .9 + Math.sin(t * 2.1 + o.ph) * .07; }
+    }
+    // items other players picked up (merged from their presence)
+    INV.scanT -= dt;
+    if (INV.scanT <= 0 && net.r) {
+      INV.scanT = .25;
+      for (const p of net.r.peers()) {
+        if (p.isMe) continue; const s = p.presence && p.presence.it; if (typeof s !== 'string' || INV.seen.get(p.peer) === s) continue;
+        INV.seen.set(p.peer, s); const parts = s.split(';'); if ((+parts[0] | 0) !== LV || !parts[1]) continue;
+        for (const e of parts[1].split(',')) { const o = os[parseInt(e.split('.')[0], 36)]; if (o && !o.taken) { o.taken = true; o.grp.visible = false; } }
+      }
+    }
+  }
+  const tg = itemTarget(), txt = tg ? '[E]  Pick up ' + ITEM.types[tg.t].icon + ' ' + ITEM.types[tg.t].name : '';
+  if (txt !== INV.lastPrompt) { INV.promptEl.textContent = txt; INV.lastPrompt = txt; if (isTouch) INV.promptEl.style.pointerEvents = txt ? 'auto' : 'none'; }
+  INV.promptEl.style.opacity = tg ? 1 : 0;
+}
+
+// ---------- input (self-registered: number keys, wheel, click, R) ----------
+window.addEventListener('keydown', (e) => {
+  if (typeof started === 'undefined' || !started || paused || e.repeat) return;
+  const tg = e.target && e.target.tagName; if (tg === 'INPUT' || tg === 'TEXTAREA') return;
+  const m = /^Digit([1-9])$/.exec(e.code); if (m && +m[1] <= ITEM.slots) { itemSelect(+m[1] - 1); return; }
+  if (e.code === 'KeyR') itemUse();
+});
+window.addEventListener('wheel', (e) => {
+  if (typeof started === 'undefined' || !started || paused || !document.pointerLockElement || !e.deltaY) return;
+  itemSelect(INV.sel + (e.deltaY > 0 ? 1 : -1));
+}, { passive: true });
+window.addEventListener('mousedown', (e) => {
+  if (e.button === 0 && typeof started !== 'undefined' && started && !paused && document.pointerLockElement) itemUse();
+});
+  </script>
+</body>
+
+</html>

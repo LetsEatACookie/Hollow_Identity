@@ -16,7 +16,7 @@
 // ---------- tuning ----------
 const LIB = {
   W: 75, H: 55,            // map size in tiles (the garden is 41 x 31, so this is ~3.2x the area). Keep both odd.
-  rooms: 16,               // reading rooms scattered between the aisles
+  rooms: 9,                // open reading rooms scattered between the aisles (the rest of the rooms are the door rooms, see doors.html)
   loops: .10,              // chance a wall between two aisles is knocked through (higher = fewer dead ends)
   maxDist: 40,             // nothing further than this is drawn: it is all fog anyway, and it keeps the frame rate up
   fog: .052, fogNight: .034, fogColor: 0x0b0806, hemi: .26,
@@ -101,7 +101,7 @@ function libGen(R) {
   }
   const dd = doorsGen(g, tt, kd, rooms, W, H, R, { sx: 11, sy: cy, minX: 13, count: DOOR.rooms, obst: [1, 2] });   // extra closed-off rooms, each with its own door (see doors.html)
   return {
-    g, tt, kd, rooms, R, sites, exit: sites[0], lib: true, cy, doors: dd.list, dm: dd.dm,
+    g, tt, kd, rooms, R, sites, exit: sites[0], lib: true, cy, doors: dd.list, dm: dd.dm, items: dd.items,
     spawn: { x0: 2 * T, x1: 5.6 * T, z0: (cy + .6) * T, z1: (cy + 3.4) * T },
     maxDist: LIB.maxDist, fogD: LIB.fog, fogN: LIB.fogNight, fogColor: LIB.fogColor, hemi: LIB.hemi, mmS: LIB.mm
   };
@@ -344,7 +344,7 @@ function libBuild(world, Q) {
   const ce = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(Math.PI / 2), A.lib.ceil); ce.position.set(W * T / 2, WH, H * T / 2); root.add(ce);
   fl.matrixAutoUpdate = ce.matrixAutoUpdate = false; fl.updateMatrix(); ce.updateMatrix();
   libFoyer(root, world, glowL);
-  doorsBuild(root, world, { wood: 0x8a6a48, band: 0x9a7a30 });
+  doorsBuild(root, world, { wood: 0x8a6a48, band: 0x9a7a30 }); itemsBuild(root, world);
   buildGates(root, world);
   world.scares = findScareSpots(world);
   if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
@@ -403,7 +403,7 @@ async function libEnter() {
     else if (kind === 2) world = casBuild(casGen(mulberry32(hashStr(code + '|castle|' + n))), Q);
     else { GW = 41; GH = 31; world = buildWorld(genWorld(mulberry32(hashStr(code + '|garden|' + n))), Q); }
     const w = world;
-    explored = new Uint8Array(GW * GH); doorsReset();
+    explored = new Uint8Array(GW * GH); doorsReset(); itemsReset();
     const mm = $('#mm'); mm.width = GW * (w.mmS || 5); mm.height = GH * (w.mmS || 5);
     libEnv(w);
     const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = indoor ? -Math.PI / 2 : Math.PI / 4; P.pitch = 0; P.flickT = .5;

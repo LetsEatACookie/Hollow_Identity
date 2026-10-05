@@ -16,7 +16,7 @@
 // ---------- tuning ----------
 const CAS = {
   W: 75, H: 55,            // same size as the library. Keep both odd.
-  rooms: 15,               // barracks / store rooms between the corridors
+  rooms: 8,                // open barracks / store rooms between the corridors (the rest of the rooms are the door rooms, see doors.html)
   loops: .10,              // chance a wall is knocked through (higher = fewer dead ends)
   galleries: 3,            // long straight stone galleries cut through the maze
   maxDist: 38,             // nothing further than this is drawn (fog anyway)
@@ -105,7 +105,7 @@ function casGen(R) {
   }
   const dd = doorsGen(g, tt, kd, rooms, W, H, R, { sx: 11, sy: cy, minX: 13, count: DOOR.rooms, obst: [1, 2] });   // extra closed-off rooms, each with its own door (see doors.html)
   return {
-    g, tt, kd, rooms, R, sites, exit: sites[0], lib: true, castle: true, cy, throne, doors: dd.list, dm: dd.dm,
+    g, tt, kd, rooms, R, sites, exit: sites[0], lib: true, castle: true, cy, throne, doors: dd.list, dm: dd.dm, items: dd.items,
     spawn: { x0: 2 * T, x1: 5.6 * T, z0: (cy + .6) * T, z1: (cy + 3.4) * T },
     maxDist: CAS.maxDist, fogD: CAS.fog, fogN: CAS.fogNight, fogColor: CAS.fogColor, hemi: CAS.hemi, hemiCol: 0x56628a, hemiGnd: 0x0d0f16, mmS: CAS.mm
   };
@@ -331,7 +331,7 @@ function casBuild(world, Q) {
   const ce = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(Math.PI / 2), C.ceil); ce.position.set(W * T / 2, WH, H * T / 2); root.add(ce);
   fl.matrixAutoUpdate = ce.matrixAutoUpdate = false; fl.updateMatrix(); ce.updateMatrix();
   casFoyer(root, world, glowL);
-  doorsBuild(root, world, { wood: 0x5a4636, band: 0x24262c });
+  doorsBuild(root, world, { wood: 0x5a4636, band: 0x24262c }); itemsBuild(root, world);
   buildGates(root, world);                  // one gate per exit chamber; only one is open at a time (see updateGates)
   world.scares = findScareSpots(world);
   if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
