@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - Extras</title>
+</head>
+
+<body>
+  <!-- EXTRAS: small things that make the place feel alive (and watched). index.html loads this file at start-up and calls updateExtras(dt, t) every frame.
+       - Whispers: creepy lines fade in at the bottom of the screen
+       - Blackouts: the lights die for a few seconds (rumble first)
+       - Thunder: lightning + thunder while you are outside
+       - The Watcher: a pale figure far away; look straight at it and it is gone
+       - Heartbeat: gets faster when your health is low
+       - Memory fragments: glowing shards of who you were. Find all 5 on a level for a reward.
+       All of it follows the "Jumpscares" setting. Tune things in the X object below. -->
+  <script>
+'use strict';
+const X = {
+  whisperEvery: [50, 100], blackEvery: [110, 220], blackFor: [3, 5], thunderEvery: [35, 80], watchEvery: [45, 90],
+  fragments: 5,
+  whispers: ['it knows your name', 'don\u2019t look back', 'you were here before', 'who are you, really?', 'the walls are listening', 'keep walking', 'it wears faces', 'you forgot something', 'behind you', 'almost out. almost.'],
+  lore: ['You remember a name. It is not yours.', 'A birthday you never had.', 'Someone was calling you home.', 'Your reflection blinked first.', 'You were never lost. You were kept.', 'The first face you ever borrowed.', 'A door you closed on purpose.', 'The garden grew around you.']
+};
+const XS = { wld: null, tw: 0, tb: 0, tt: 0, tk: 0, tf: 0, black: 0, flash: 0, hb: 0, got: 0, frags: [], watcher: null, watch: 0, eyes: 0, el: null };
+const xr = (a) => a[0] + Math.random() * (a[1] - a[0]);
+function xUi() {
+  if (XS.el) return;
+  const mk = (css) => { const d = document.createElement('div'); d.style.cssText = css; document.body.appendChild(d); return d; };
+  XS.el = {
+    w: mk('position:fixed;left:0;right:0;bottom:24%;text-align:center;font:italic 22px Georgia,serif;letter-spacing:.08em;color:#cfd6cf;text-shadow:0 0 12px #000;opacity:0;pointer-events:none;z-index:13;transition:opacity 1.6s'),
+    b: mk('position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:12;transition:opacity .25s'),
+    f: mk('position:fixed;inset:0;background:#dfe8ff;opacity:0;pointer-events:none;z-index:12')
+  };
+}
+function xOn() { return typeof CFG === 'undefined' || CFG.scares !== false; }
+function xFree(minD, maxD) {                      // a random open tile between minD and maxD tiles from the player
+  const px = Math.floor(P.x / T), pz = Math.floor(P.z / T);
+  for (let i = 0; i < 60; i++) {
+    const tx = (Math.random() * GW) | 0, ty = (Math.random() * GH) | 0, d = Math.hypot(tx - px, ty - pz);
+    if (world.g[ty * GW + tx] === 0 && d >= minD && d <= maxD) return { x: (tx + .5) * T, z: (ty + .5) * T };
+  }
+  return null;
+}
+function xSee(x, z) {                              // clear line of sight from the camera to a point?
+  const n = Math.ceil(Math.hypot(x - P.x, z - P.z) / (T * .5));
+  for (let i = 1; i < n; i++) { const k = i / n; if (tileV(Math.floor((P.x + (x - P.x) * k) / T), Math.floor((P.z + (z - P.z) * k) / T)) === 1) return false; }
+  return true;
+}
+function xWhisper(txt) {
+  xUi(); const e = XS.el.w; e.textContent = txt || X.whispers[(Math.random() * X.whispers.length) | 0]; e.style.opacity = .85;
+  Aud.soft(210, 150, 1.4, .03); Aud.burst(900, .9, .02, .6); setTimeout(() => { e.style.opacity = 0; }, 3200);
+}
+function xBuild() {                                // new level -> reset timers, scatter the fragments
+  XS.wld = world; XS.got = 0; XS.black = 0; XS.flash = 0; XS.frags.forEach(f => scene.remove(f.m)); XS.frags = [];
+  XS.tw = xr(X.whisperEvery) * .5; XS.tb = xr(X.blackEvery); XS.tt = xr(X.thunderEvery); XS.tk = xr(X.watchEvery); XS.watch = 0;
+  if (XS.watcher) XS.watcher.visible = false;
+  for (let i = 0; i < X.fragments; i++) {
+    const p = xFree(6, 60); if (!p) continue;
+    const m = new THREE.Mesh(new THREE.OctahedronGeometry(.2), new THREE.MeshBasicMaterial({ color: 0xb48cff }));
+    m.position.set(p.x, 1.1, p.z); scene.add(m);
+    const l = new THREE.PointLight(0xb48cff, .8, 7); m.add(l);
+    XS.frags.push({ m, x: p.x, z: p.z, ph: Math.random() * 6 });
+  }
+}
+function updateExtras(dt, t) {
+  if (!started || P.escaped) return;
+  xUi(); if (XS.wld !== world) xBuild();
+  const tp = tileType(P.x, P.z), outdoor = (tp === 3 || tp === 4), scary = xOn();
+  // memory fragments (always on: they are a reward, not a scare)
+  for (let i = XS.frags.length - 1; i >= 0; i--) {
+    const f = XS.frags[i]; f.m.rotation.y += dt * 1.6; f.m.position.y = 1.1 + Math.sin(t * 2 + f.ph) * .12;
+    if (Math.hypot(P.x - f.x, P.z - f.z) < 1.5) {
+      scene.remove(f.m); XS.frags.splice(i, 1); XS.got++;
+      Aud.tone(520, 1040, .5, .1); Aud.soft(260, 390, 1.2, .05);
+      toast('Memory ' + XS.got + '/' + X.fragments + ' \u2014 ' + X.lore[(Math.random() * X.lore.length) | 0]);
+      if (XS.got >= X.fragments) { P.hp = 100; P.stam = 100; Torch.dead = false; Torch.fault = false; toast('You remember enough. Health restored.'); }
+    }
+  }
+  if (!scary) { XS.el.b.style.opacity = 0; if (XS.watcher) XS.watcher.visible = false; return; }
+  // whispers
+  XS.tw -= dt; if (XS.tw <= 0) { XS.tw = xr(X.whisperEvery); xWhisper(); }
+  // blackout
+  XS.tb -= dt;
+  if (XS.tb <= 0 && XS.black <= 0) { XS.black = xr(X.blackFor); XS.tb = xr(X.blackEvery); Aud.rumble(); P.flickT = .6; XS.el.b.style.transition = 'opacity .25s'; XS.el.b.style.opacity = .93; if (Math.random() < .6) setTimeout(() => xWhisper('shh.'), 900); }
+  if (XS.black > 0) { XS.black -= dt; if (XS.black <= 0) { XS.el.b.style.transition = 'opacity 1.2s'; XS.el.b.style.opacity = 0; Aud.shift(); } }
+  // thunder (outside only)
+  if (outdoor) {
+    XS.tt -= dt; if (XS.tt <= 0) { XS.tt = xr(X.thunderEvery); XS.flash = 1; setTimeout(() => { Aud.burst(120, 2.2, .35, .5); Aud.tone(48, 30, 2, .3); }, 500 + Math.random() * 1500); }
+  }
+  if (XS.flash > 0) { XS.flash = Math.max(0, XS.flash - dt * 2.5); XS.el.f.style.opacity = (XS.flash > .5 ? .55 : XS.flash * .5).toFixed(2); } else XS.el.f.style.opacity = 0;
+  // heartbeat
+  if (P.hp < 45 && P.down <= 0) {
+    XS.hb -= dt; if (XS.hb <= 0) { XS.hb = .45 + P.hp / 100; Aud.tone(64, 40, .14, .3); setTimeout(() => Aud.tone(58, 38, .16, .22), 170); }
+  }
+  // the watcher: stands far off; look right at it and it is gone
+  const w = XS.watcher || (XS.watcher = scareFigure().clone());
+  if (!w.parent) scene.add(w);
+  if (!w.visible) {
+    XS.tk -= dt;
+    if (XS.tk <= 0 && !Scare.act) { const p = xFree(9, 16); XS.tk = xr(X.watchEvery); if (p && xSee(p.x, p.z)) { w.position.set(p.x, 0, p.z); w.visible = true; XS.watch = 0; XS.eyes = 0; } }
+  } else {
+    const dx = w.position.x - P.x, dz = w.position.z - P.z, d = Math.hypot(dx, dz) || 1;
+    w.rotation.y = Math.atan2(dx, dz);
+    const look = (-Math.sin(P.yaw)) * dx / d + (-Math.cos(P.yaw)) * dz / d;
+    XS.watch += dt;
+    if (look > .93 && xSee(w.position.x, w.position.z)) XS.eyes += dt; else XS.eyes = Math.max(0, XS.eyes - dt * .5);
+    if (XS.eyes > .9 || d < 3.5 || XS.watch > 40) { w.visible = false; if (XS.eyes > .9) { Aud.soft(90, 60, .7, .08); Scare.shake = Math.max(Scare.shake, .25); if (Math.random() < .5) xWhisper('i saw you see me'); } }
+  }
+}
+  </script>
+</body>
+
+</html>
