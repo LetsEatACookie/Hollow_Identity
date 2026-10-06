@@ -15,14 +15,14 @@
 'use strict';
 // ---------- tuning ----------
 const LIB = {
-  W: 75, H: 55,            // map size in tiles (the garden is 41 x 31, so this is ~3.2x the area). Keep both odd.
-  rooms: 9,                // open reading rooms scattered between the aisles (the rest of the rooms are the door rooms, see doors.html)
+  W: 91, H: 67,            // map size in tiles (the garden is 41 x 31, so this is ~4.8x the area)
+  rooms: 24,               // reading rooms scattered between the aisles
   loops: .10,              // chance a wall between two aisles is knocked through (higher = fewer dead ends)
   maxDist: 40,             // nothing further than this is drawn: it is all fog anyway, and it keeps the frame rate up
   fog: .052, fogNight: .034, fogColor: 0x0b0806, hemi: .26,
   mm: 3                    // minimap pixels per tile
 };
-let LV = 0, lvBusy = false;    // current level number (0 = first garden, 1 = library, 2 = next garden, ...)
+let LV = 0, lvBusy = false;    // current level: 0 = garden, 1 = library
 const LG = {};                 // library geometries (A.lib holds the materials)
 
 // ---------- generation (deterministic from the room code) ----------
@@ -68,21 +68,12 @@ function libGen(R) {
       else if (type === 5 && R() < .85 && (Math.abs(ox - (w - 1) / 2) > 1 || Math.abs(oy - (h - 1) / 2) > 1)) { g[I(x, y)] = 1; kd[I(x, y)] = 1; }   // pillars
     }
   };
-  // the ways out: several exit halls (the first one always at the far east end). Only ONE gate is open at a time and it hops between them
-  // on the shared schedule (see buildGates / updateGates in maps.html). EXIT_SITES is the same knob the garden uses.
-  const sites = [], nxE = Math.floor((W - 2 - 8 - 13) / 2) + 1, nyE = Math.floor((H - 2 - 8 - 1) / 2) + 1;
-  for (let n = 0, sep = 24; n < EXIT_SITES; n++) {
-    let got = null;
-    for (let k = 0; k < 600 && !got; k++) {
-      const x0 = n === 0 ? W - 10 : 13 + 2 * Math.floor(R() * nxE), y0 = 1 + 2 * Math.floor(R() * nyE);
-      if (fits(x0, y0, 9, 9) && sites.every(s => Math.hypot(s.tx - (x0 + 4), s.ty - (y0 + 4)) >= sep)) got = [x0, y0];
-      else if (k % 100 === 99 && sep > 12) sep -= 4;           // cramped? relax the spacing a little
-    }
-    if (!got) break;
-    const [ex0, ey0] = got; place(ex0, ey0, 9, 9, 6);
-    for (const [px, py] of [[1, 1], [7, 1], [1, 7], [7, 7]]) { g[I(ex0 + px, ey0 + py)] = 1; kd[I(ex0 + px, ey0 + py)] = 1; }
-    sites.push({ tx: ex0 + 4, ty: ey0 + 4, x: (ex0 + 4.5) * T, z: (ey0 + 4.5) * T });
-  }
+  // the way out: a hall at the far east end
+  const ex0 = W - 10, ey0 = 1 + 2 * Math.floor(R() * ((H - 10 - 1) / 2 + 1));
+  place(ex0, ey0, 9, 9, 6);
+  for (const [px, py] of [[1, 1], [7, 1], [1, 7], [7, 7]]) { g[I(ex0 + px, ey0 + py)] = 1; kd[I(ex0 + px, ey0 + py)] = 1; }
+  const site = { tx: W - 2, ty: ey0 + 4, x: (W - 1) * T - 1.0, z: (ey0 + 4.5) * T };      // you stand just in front of the exit door
+  const exitDoor = { tx: W - 1, ty: ey0 + 4, rx: -1, rz: 0, exit: true };
   // two great halls, then the reading rooms
   let atria = 0;
   for (let k = 0; k < 80 && atria < 2; k++) {
@@ -99,9 +90,23 @@ function libGen(R) {
       if (fits(x0, y0, w, h)) { place(x0, y0, w, h, 2); break; }
     }
   }
-  const dd = doorsGen(g, tt, kd, rooms, W, H, R, { sx: 11, sy: cy, minX: 13, count: DOOR.rooms, obst: [1, 2] });   // extra closed-off rooms, each with its own door (see doors.html)
+  // every opening in the rim of a room (and of the foyer) gets a proper door
+  const doors = [], seen = new Set(), solid = (x, y) => x < 0 || y < 0 || x >= W || y >= H || g[I(x, y)] === 1;
+  const rim = (x0, y0, w, h) => {
+    const c = [];
+    for (let x = x0; x < x0 + w; x++) c.push([x, y0 - 1, 0, 1], [x, y0 + h, 0, -1]);
+    for (let y = y0; y < y0 + h; y++) c.push([x0 - 1, y, 1, 0], [x0 + w, y, -1, 0]);
+    for (const [tx, ty, rx, rz] of c) {            // (rx, rz) points from the doorway towards the room
+      if (tx < 1 || ty < 1 || tx > W - 2 || ty > H - 2 || g[I(tx, ty)] !== 0) continue;
+      const lx = rz !== 0 ? 1 : 0, lz = rx !== 0 ? 1 : 0;
+      if (!solid(tx + lx, ty + lz) || !solid(tx - lx, ty - lz) || solid(tx - rx, ty - rz)) continue;
+      const k = tx + ',' + ty; if (seen.has(k)) continue; seen.add(k);
+      doors.push({ tx, ty, rx, rz, foyer: tx === FX0 + FW && ty === cy });
+    }
+  };
+  rim(FX0, FY0, FW, FW); for (const r of rooms) rim(r.x0, r.y0, r.w, r.h);
   return {
-    g, tt, kd, rooms, R, sites, exit: sites[0], lib: true, cy, doors: dd.list, dm: dd.dm, items: dd.items,
+    g, tt, kd, rooms, R, doors, exitDoor, walls: [], sites: [site], exit: site, lib: true, cy,
     spawn: { x0: 2 * T, x1: 5.6 * T, z0: (cy + .6) * T, z1: (cy + 3.4) * T },
     maxDist: LIB.maxDist, fogD: LIB.fog, fogN: LIB.fogNight, fogColor: LIB.fogColor, hemi: LIB.hemi, mmS: LIB.mm
   };
@@ -203,6 +208,143 @@ function libPaintWeb(x, w, h) {
   }
 }
 
+// ---------- doors: modelled on a real panelled apartment door (lacquered wood, raised panels, lever handle, peephole, casing) ----------
+// a door lives in a thin wallpapered partition that closes the doorway down to door width (instead of a gate spanning the whole hallway)
+const DOOR = { OW: 1.5, OH: 2.7, TH: .4, LW: 1.38, LH: 2.6, HX: .705 };
+
+function libBox(w, h, d, x, y, z, u = 1, v = 1) {       // a box whose UVs are in metres, so textures keep their scale on pieces of any size
+  const g = new THREE.BoxGeometry(w, h, d), uv = g.attributes.uv, n = g.attributes.normal;
+  for (let i = 0; i < uv.count; i++) {
+    const uw = Math.abs(n.getX(i)) > .5 ? d : w, vh = Math.abs(n.getY(i)) > .5 ? d : h;
+    uv.setXY(i, uv.getX(i) * uw / u, uv.getY(i) * vh / v);
+  }
+  return g.translate(x, y, z);
+}
+
+function libPaintDoor(x, w, h) {
+  const g = x.createLinearGradient(0, 0, w, 0); g.addColorStop(0, '#6a3317'); g.addColorStop(.5, '#7b4020'); g.addColorStop(1, '#63301a');
+  x.fillStyle = g; x.fillRect(0, 0, w, h);
+  for (let i = 0; i < 360; i++) {                          // long wavy grain
+    const px = TR() * w, a = .04 + TR() * .13;
+    x.strokeStyle = TR() < .6 ? `rgba(30,12,4,${a})` : `rgba(195,115,62,${a * .8})`; x.lineWidth = .6 + TR() * 2.2;
+    x.beginPath(); x.moveTo(px, 0); let cx = px; for (let y = 0; y <= h; y += 48) { cx += (TR() - .5) * 3; x.lineTo(cx, y); } x.stroke();
+  }
+  const sx = w * .12, top = h * .05, bot = h * .075, gap = h * .028, gapx = w * .035, iw = w - 2 * sx;
+  const panel = (px, py, pw, ph) => {
+    x.fillStyle = 'rgba(20,8,3,.6)'; x.fillRect(px - 4, py - 4, pw + 8, ph + 8);           // groove round the raised field
+    const pg = x.createLinearGradient(px, py, px + pw, py + ph); pg.addColorStop(0, '#88492a'); pg.addColorStop(1, '#69341a');
+    x.fillStyle = pg; x.fillRect(px, py, pw, ph);
+    x.fillStyle = 'rgba(255,205,155,.30)'; x.fillRect(px, py, pw, 4); x.fillRect(px, py, 4, ph);          // bevel: lit top/left
+    x.fillStyle = 'rgba(10,4,1,.5)'; x.fillRect(px, py + ph - 4, pw, 4); x.fillRect(px + pw - 4, py, 4, ph);   // shaded bottom/right
+    x.strokeStyle = 'rgba(20,8,3,.42)'; x.lineWidth = 2; x.strokeRect(px + 14, py + 14, pw - 28, ph - 28);
+  };
+  let y = top;
+  { const n = 5, sw = (iw - gapx * (n - 1)) / n, sh = h * .15; for (let i = 0; i < n; i++) panel(sx + i * (sw + gapx), y, sw, sh); y += sh + gap * 1.6; }
+  const rows = 3, cols = 3, rh = (h - bot - y - gap * (rows - 1)) / rows, cw = (iw - gapx * (cols - 1)) / cols;
+  for (let r = 0; r < rows; r++) { for (let c = 0; c < cols; c++) panel(sx + c * (cw + gapx), y, cw, rh); y += rh + gap; }
+  const sh = x.createLinearGradient(0, 0, w, 0); sh.addColorStop(0, 'rgba(0,0,0,.35)'); sh.addColorStop(.06, 'rgba(0,0,0,0)'); sh.addColorStop(.94, 'rgba(0,0,0,0)'); sh.addColorStop(1, 'rgba(0,0,0,.35)');
+  x.fillStyle = sh; x.fillRect(0, 0, w, h);                                                   // soft edge shading
+  const vg = x.createLinearGradient(0, 0, 0, h); vg.addColorStop(0, 'rgba(255,225,190,.13)'); vg.addColorStop(.5, 'rgba(255,225,190,0)'); vg.addColorStop(1, 'rgba(0,0,0,.28)');
+  x.fillStyle = vg; x.fillRect(0, 0, w, h);                                                   // varnish sheen + grime at the foot
+  for (let i = 0; i < 9; i++) { x.strokeStyle = `rgba(230,190,150,${.05 + TR() * .08})`; x.lineWidth = 1; x.beginPath(); const sx0 = w * (.55 + TR() * .35), sy0 = h * (.4 + TR() * .2); x.moveTo(sx0, sy0); x.lineTo(sx0 + (TR() - .5) * 40, sy0 + (TR() - .5) * 30); x.stroke(); }   // scuffs round the handle
+  grain(x, w, h, 12);
+}
+
+function libPaintPaper(x, S) {     // blue-grey damask wallpaper, stained with age
+  x.fillStyle = '#5b6168'; x.fillRect(0, 0, S, S);
+  for (let i = 0; i < 8; i++) { x.fillStyle = 'rgba(255,255,255,.035)'; x.fillRect(i * S / 8, 0, S / 16, S); }
+  const motif = (cx, cy, s) => {
+    x.save(); x.translate(cx, cy);
+    for (const m of [1, -1]) {
+      x.save(); x.scale(m, 1); x.fillStyle = 'rgba(208,192,150,.62)'; x.beginPath(); x.moveTo(0, -s);
+      x.bezierCurveTo(s * .55, -s * .75, s * .62, -s * .15, s * .2, s * .1); x.bezierCurveTo(s * .55, s * .3, s * .38, s * .7, 0, s * .95);
+      x.lineTo(0, s * .55); x.bezierCurveTo(s * .2, s * .35, s * .2, s * .2, 0, s * .1); x.closePath(); x.fill(); x.restore();
+    }
+    x.fillStyle = 'rgba(208,192,150,.72)'; x.beginPath(); x.ellipse(0, -s * .1, s * .09, s * .2, 0, 0, 7); x.fill(); x.restore();
+  };
+  for (const [fx, fy] of [[.25, .25], [.75, .75]]) for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) motif(fx * S + ox, fy * S + oy, S * .21);
+  for (let i = 0; i < 5; i++) blob(x, S, TR() * S, TR() * S, S * (.12 + TR() * .12), 'rgba(30,22,10,A)', .16);
+  grain(x, S, S, 14);
+}
+
+function doorAssets(Q) {
+  if (A.door) return A.door;
+  const S = Q.tex, dw = Math.min(S, 512), D = DOOR, hw = D.OW / 2, sideW = (T - D.OW) / 2, t = {};
+  t.door = mk(dw, dw * 2, libPaintDoor, { repeat: false }); t.paper = mk(S, S, libPaintPaper);
+  const mat = {
+    door: new THREE.MeshPhongMaterial({ map: t.door, specular: 0x5a3a24, shininess: 26 }),
+    trim: new THREE.MeshPhongMaterial({ map: A.wood.map, color: 0xb98a62, specular: 0x2c1c10, shininess: 12 }),
+    paper: LitMat({ map: t.paper }),
+    brass: new THREE.MeshPhongMaterial({ color: 0xcdbb86, specular: 0xfff2c8, shininess: 80 })
+  };
+  const g = {};
+  g.part = mergeGeos([
+    libBox(sideW, WH, D.TH, -(hw + sideW / 2), WH / 2, 0, 1.6, 1.6), libBox(sideW, WH, D.TH, hw + sideW / 2, WH / 2, 0, 1.6, 1.6),
+    libBox(D.OW, WH - D.OH, D.TH, 0, D.OH + (WH - D.OH) / 2, 0, 1.6, 1.6)]);
+  const c = .11, cz = D.TH / 2 + .015, lin = .04, tr = [
+    libBox(lin, D.OH, D.TH, -(hw - lin / 2), D.OH / 2, 0, .8, .8), libBox(lin, D.OH, D.TH, hw - lin / 2, D.OH / 2, 0, .8, .8), libBox(D.OW, lin, D.TH, 0, D.OH - lin / 2, 0, .8, .8)];
+  for (const s of [-1, 1]) tr.push(libBox(c, D.OH + c, .03, -(hw + c / 2), (D.OH + c) / 2, s * cz, .8, .8), libBox(c, D.OH + c, .03, hw + c / 2, (D.OH + c) / 2, s * cz, .8, .8), libBox(D.OW + 2 * c, c, .03, 0, D.OH + c / 2, s * cz, .8, .8));
+  for (const s of [-1, 1]) tr.push(libBox(sideW - c, .17, D.TH + .05, s * (hw + c + (sideW - c) / 2), .085, 0, .8, .8));   // skirting
+  tr.push(libBox(T, .14, D.TH + .06, 0, WH - .07, 0, .8, .8));                                                              // crown moulding
+  g.trim = mergeGeos(tr);
+  g.leaf = libBox(D.LW, D.LH, .05, D.LW / 2, D.LH / 2 + .02, 0, D.LW, D.LH);            // hinged on x = 0, swings round the y axis
+  const hxh = D.LW - .11, hy = 1.05, hp = [new THREE.CylinderGeometry(.013, .013, .07, 10).rotateX(Math.PI / 2).translate(D.LW / 2, 1.55, 0)];   // peephole
+  for (const s of [-1, 1]) hp.push(libBox(.05, .22, .012, hxh, hy, s * .031), new THREE.CylinderGeometry(.016, .016, .09, 8).rotateX(Math.PI / 2).translate(hxh, hy, s * .075), libBox(.16, .022, .022, hxh - .06, hy, s * .115));
+  for (const yy of [.3, 1.3, 2.3]) hp.push(new THREE.CylinderGeometry(.02, .02, .11, 8).translate(0, yy, 0));                                        // hinges
+  g.hw = mergeGeos(hp);
+  return A.door = { tex: t, mat, g };
+}
+
+// places one door in the doorway tile (tx,ty); (rx,rz) points from that tile towards the room. S = four sinks with add(x,y,z,yaw,...)
+function doorAdd(S, tx, ty, rx, rz, o = {}) {
+  const D = DOOR, th = Math.atan2(rx, rz), sn = Math.sin(th), cs = Math.cos(th);
+  const cx = (tx + .5) * T + rx * (T / 2 - D.TH / 2), cz = (ty + .5) * T + rz * (T / 2 - D.TH / 2);
+  const loc = (lx, lz) => [cx + lx * cs + lz * sn, cz - lx * sn + lz * cs];
+  const hs = o.hs || -1, sw = o.sw || 1, al = o.al == null ? 1 : o.al;
+  S.part.add(cx, 0, cz, th, 1, 1, 1, o.tint || 0xffffff); S.trim.add(cx, 0, cz, th, 1, 1, 1, o.tint2 || 0xffffff);
+  const [hx, hz] = loc(hs * D.HX, 0), yaw = th + (hs < 0 ? 0 : Math.PI) + (hs < 0 ? -1 : 1) * sw * al;
+  S.leaf.add(hx, 0, hz, yaw, 1, 1, 1, o.leafTint || 0xffffff); S.hw.add(hx, 0, hz, yaw, 1, 1, 1, 0xffffff);
+  return { cx, cz, th, rx, rz, loc };
+}
+function doorWalls(out, d) {             // the solid wall either side of the opening, so you can't walk through it
+  const D = DOOR, a = D.OW / 2 - .04, b = T / 2, ht = D.TH / 2;
+  for (const s of [-1, 1]) {
+    const l0 = Math.min(s * a, s * b), l1 = Math.max(s * a, s * b);
+    if (Math.abs(d.rx) === 1) out.push({ x0: d.cx - ht, x1: d.cx + ht, z0: d.cz + l0, z1: d.cz + l1 });
+    else out.push({ x0: d.cx + l0, x1: d.cx + l1, z0: d.cz - ht, z1: d.cz + ht });
+  }
+}
+function doorSingle(root, world, tx, ty, rx, rz, o) {      // one stand-alone door (the garden's starting room)
+  const m = doorAssets(Q), mkS = (geo, mat) => ({ add(x, y, z, ry) { const b = new THREE.Mesh(geo, mat); b.position.set(x, y, z); b.rotation.y = ry; root.add(b); } });
+  const d = doorAdd({ part: mkS(m.g.part, m.mat.paper), trim: mkS(m.g.trim, m.mat.trim), leaf: mkS(m.g.leaf, m.mat.door), hw: mkS(m.g.hw, m.mat.brass) }, tx, ty, rx, rz, o);
+  if (world) { world.walls = world.walls || []; doorWalls(world.walls, d); }
+  return d;
+}
+
+// the way out in the library: a door in the east wall of the exit hall, standing ajar with the light of the other side spilling through
+function libGate(root, world, st, i, signTex) {
+  const d = world.exitDoor, D = DOOR, grp = new THREE.Group(); grp.position.set(d.cx, 0, d.cz); grp.rotation.y = d.th; root.add(grp);   // local +z points into the hall
+  const ow = D.OW - .08, oh = D.OH - .04, zb = -D.TH / 2;
+  const back = new THREE.Mesh(new THREE.PlaneGeometry(ow, oh), new THREE.MeshBasicMaterial({ color: 0x02100c })); back.position.set(0, oh / 2, zb + .02); grp.add(back);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTime, uK: { value: 1 } }, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+    fragmentShader: `varying vec2 vUv;uniform float uTime;uniform float uK;
+    void main(){vec2 p=vUv-.5;float e=smoothstep(0.,.2,vUv.x)*smoothstep(1.,.8,vUv.x)*smoothstep(0.,.1,vUv.y)*smoothstep(1.,.88,vUv.y);
+    float r=length(p*vec2(1.,.5));float w=.5+.5*sin(atan(p.y,p.x)*4.+uTime*1.2-r*14.);float rings=.5+.5*sin(r*18.-uTime*2.4);
+    vec3 c=mix(vec3(.12,.62,.5),vec3(.72,1.,.86),w*rings*.8+.2);float core=smoothstep(.55,0.,r);
+    gl_FragColor=vec4(c*(.45+.9*core)*uK,(.5+.4*core)*(.3+.7*e)*uK);}`
+  });
+  const portal = new THREE.Mesh(new THREE.PlaneGeometry(ow, oh), mat); portal.position.set(0, oh / 2, zb + .05); grp.add(portal);
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: A.tex.glow, color: 0x66ffc8, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: .9 }));
+  glow.scale.set(3.4, 3.8, 1); glow.position.set(0, 1.4, zb + .35); grp.add(glow);
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  sign.scale.set(2.7, .5, 1); sign.position.set(0, 3.55, D.TH / 2 + .07); grp.add(sign);
+  const light = { id: 'gate', x: d.cx + d.rx * .9, y: 1.4, z: d.cz + d.rz * .9, col: 0x66ffc8, int: 0, base: 2.6, d: 16, fl: .1, ph: 2 + i, w: 3 };
+  LIGHTS.push(light);
+  return { st, grp, portal, mat, glow, sign, light, k: 0 };
+}
+
 function libAssets(Q) {
   if (A.lib) return;
   const S = Q.tex, t = {};
@@ -225,14 +367,15 @@ function libAssets(Q) {
   LG.chand = mergeGeos([new THREE.TorusGeometry(1.1, .05, 6, 18).rotateX(Math.PI / 2), bx(2.2, .04, .04, 0, 0, 0), bx(.04, .04, 2.2, 0, 0, 0), cyl(.02, .02, WH - 3.3, 4, (WH - 3.3) / 2)]);
   LG.candle = cyl(.045, .05, .26, 8, .13);
   LG.book = bx(.3, .05, .22, 0, 0, 0);
+  doorAssets(Q);
 }
 
 // dust motes hanging in the lamplight (the same drifting-points shader as the garden fireflies, in a warmer colour)
-function libDust(list, R, col) {
+function libDust(list, R) {
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(list, 3));
   const ph = new Float32Array(list.length / 3); for (let i = 0; i < ph.length; i++)ph[i] = R();
   geo.setAttribute('aPh', new THREE.BufferAttribute(ph, 1));
-  const m = fireMat(); m.fragmentShader = m.fragmentShader.replace('vec3(.85,1.,.45)', col || 'vec3(1.,.82,.5)');
+  const m = fireMat(); m.fragmentShader = m.fragmentShader.replace('vec3(.85,1.,.45)', 'vec3(1.,.82,.5)');
   const p = new THREE.Points(geo, m); p.frustumCulled = false; return p;
 }
 
@@ -253,12 +396,11 @@ function libFoyer(root, world, glowL) {
   LIGHTS.push({ id: 'lamp', x: lx, y: 1.5, z: lz + .2, col: 0xffbe70, int: 2.9, d: 24, fl: .12, ph: 1.7, w: 3 });
   // a few crates and a stack of returns
   box(.9, .9, .9, 2 * T, .45, (cy + 2.6) * T, wood, .2); box(.7, .7, .7, 2 * T + .1, 1.25, (cy + 2.6) * T, wood, .8); box(.8, .8, .8, 6.2 * T, .4, (cy + 3) * T, wood, .5);
-  // door frame between the foyer and the first aisle, with a plaque over it
+  // plaque over the foyer door (the door itself is one of world.doors)
   const dx = 8 * T + .15, dzz = (cy + .5) * T;
-  box(.25, 3.4, .25, dx, 1.7, dzz - T / 2 + .1, wood); box(.25, 3.4, .25, dx, 1.7, dzz + T / 2 - .1, wood); box(.3, .3, T, dx, 3.4, dzz, wood);
   const c = document.createElement('canvas'); c.width = 512; c.height = 96; const x = c.getContext('2d');
   x.font = '600 50px Cinzel, Georgia, serif'; x.textAlign = 'center'; x.fillStyle = 'rgba(224,196,140,0.95)'; x.shadowColor = '#000'; x.shadowBlur = 8; x.fillText('SILENCE, PLEASE', 256, 62);
-  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false })); sign.scale.set(2.4, .45, 1); sign.position.set(dx - .35, 3.85, dzz); root.add(sign);
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false })); sign.scale.set(2.4, .45, 1); sign.position.set(8 * T - .12, 3.5, dzz); root.add(sign);
   // lantern just outside, so the way is faintly lit
   const hx = 10 * T + .4, hz = (cy + .5) * T - T / 2 + .2;
   box(.2, .34, .2, hx, 2.3, hz, A.lantB);
@@ -273,13 +415,13 @@ function libBuild(world, Q) {
   const root = new THREE.Group(); scene.add(root); world.root = root;
   const I = (x, y) => y * W + x, TC = (t) => (t + .5) * T;
   libAssets(Q);
-  const L = {}; for (const k of ['shelfA', 'shelfB', 'shelfC', 'panel', 'rug', 'pillar', 'table', 'candle', 'flame', 'book', 'lantB', 'lantC', 'web', 'ladder', 'chand']) L[k] = new IL();
+  const L = {}; for (const k of ['shelfA', 'shelfB', 'shelfC', 'panel', 'rug', 'pillar', 'table', 'candle', 'flame', 'book', 'lantB', 'lantC', 'web', 'ladder', 'chand', 'part', 'trim', 'leaf', 'hw']) L[k] = new IL();
   L.rug.cs = 24;
   const glowL = [], glowS = [], dust = [];
   const cnt = (x) => Math.floor(x * Q.dens + R());
   const jit = (l, h, s) => { const v = l + R() * (h - l); return new THREE.Color(v, v * (1 + (R() - .5) * s), v * (1 - (R() - .5) * s)); };
   const FLAME = new THREE.Color(0xffa84a), BC = [0x6a2a24, 0x3a4a2c, 0x2a3552, 0x7a5a2a, 0x4a2a4a, 0x8a7a5a, 0x5a3a24].map(c => new THREE.Color(c));
-  const WHITE = new THREE.Color(0xffffff), DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   const isOpen = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 0;
   const isShelf = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 1 && kd[I(x, y)] === 0;
   const candle = (x, y, z, lit) => {
@@ -289,6 +431,7 @@ function libBuild(world, Q) {
   for (let ty = 0; ty < H; ty++)for (let tx = 0; tx < W; tx++) {
     const v = g[I(tx, ty)], k = kd[I(tx, ty)], cx = TC(tx), cz = TC(ty), tp = tt[I(tx, ty)];
     if (v === 1 && k === 0) {          // a bookcase: only if someone could see it
+      if (world.exitDoor && tx === world.exitDoor.tx && ty === world.exitDoor.ty) continue;      // the exit door replaces this piece of wall
       let ex = false;
       for (let a = -1; a <= 1 && !ex; a++)for (let b = -1; b <= 1; b++) if (isOpen(tx + a, ty + b)) { ex = true; break; }
       if (!ex) continue;
@@ -311,7 +454,7 @@ function libBuild(world, Q) {
       if (!isShelf(tx + dx, ty + dy)) continue;
       const th = Math.atan2(-dx, -dy), tX = Math.cos(th), tZ = -Math.sin(th), bx = cx + dx * (T / 2 - .03), bz = cz + dy * (T / 2 - .03);
       if (R() < .075) { const u = (R() - .5) * (T - .7), s = 1.1 + R(); L.web.add(bx + tX * u - dx * .05, WH - s / 2 - .04, bz + tZ * u - dy * .05, th + (R() < .5 ? Math.PI : 0), s, s, s); }
-      if (tp !== 1 && R() < .025) { const u = (R() - .5) * (T - 1); L.ladder.add(bx + tX * u - dx * .5, 0, bz + tZ * u - dy * .5, th, 1, 1, 1, WHITE, -.14); }   // needs a colour: shares the wood material with the (coloured) tables
+      if (tp !== 1 && R() < .025) { const u = (R() - .5) * (T - 1); L.ladder.add(bx + tX * u - dx * .5, 0, bz + tZ * u - dy * .5, th, 1, 1, 1, jit(.8, 1, .04), -.14); }
       if (R() < .012) glowS.push([bx - dx * .12, 1 + R() * 2.6, bz - dy * .12, 1, .8, .4]);      // a book that glows faintly
       const lr = tp === 1 ? 0 : inRoom ? .07 : .04;
       if (R() < lr) {
@@ -322,7 +465,24 @@ function libBuild(world, Q) {
       }
     }
   }
-  // chandeliers over the great halls (each exit hall is lit by its own gate, only while that gate is open)
+  // doors: a wallpapered partition, casing, a hinged leaf and brass hardware in every doorway
+  for (const d of [...world.doors, world.exitDoor]) {
+    const o = d.exit ? { hs: -1, sw: 1, al: 1.0 } : d.foyer ? { hs: 1, sw: 1, al: 1.35 } : { hs: R() < .5 ? -1 : 1, sw: R() < .65 ? 1 : -1, al: .5 + R() * .95 };
+    o.tint = jit(.8, 1, .05); o.tint2 = jit(.8, 1, .06); o.leafTint = jit(.78, 1, .14);
+    const D0 = doorAdd(L, d.tx, d.ty, d.rx, d.rz, o);
+    if (d.exit) { d.cx = D0.cx; d.cz = D0.cz; d.th = D0.th; continue; }
+    doorWalls(world.walls, D0);
+    if (d.foyer) continue;
+    const lat = (R() < .5 ? -1 : 1) * 1.18;
+    for (const side of [-1, 1]) {            // a wall lantern beside the door: -1 on the corridor face, +1 on the room face
+      if (R() > (side < 0 ? .4 : .12)) continue;
+      const [lx, lz] = D0.loc(lat, side * (DOOR.TH / 2 + .14)), ly = 2.3 + R() * .2, th2 = side < 0 ? Math.atan2(-d.rx, -d.rz) : Math.atan2(d.rx, d.rz);
+      const rr = R(), colr = rr < .8 ? 0xffb45a : rr < .93 ? 0xffd890 : 0xff8a5a, cc = new THREE.Color(colr);
+      L.lantB.add(lx, ly, lz, th2); L.lantC.add(lx, ly, lz, th2, 1, 1, 1, cc); glowL.push([lx, ly, lz, cc.r, cc.g, cc.b]);
+      LIGHTS.push({ x: lx, y: ly, z: lz, col: colr, int: 2.1, d: 11, fl: .18, ph: R() * 10, w: 1 });
+    }
+  }
+  // chandeliers over the great halls, and a cold light over the way out
   for (const r of rooms) {
     const mx = TC(r.x0 + (r.w - 1) / 2), mz = TC(r.y0 + (r.h - 1) / 2);
     if (r.type === 5) {
@@ -333,18 +493,18 @@ function libBuild(world, Q) {
         LIGHTS.push({ x: cx, y: 3.1, z: mz, col: 0xffc88a, int: 2.8, d: 20, fl: .1, ph: R() * 10, w: 2 });
       }
     }
+    if (r.type === 6) LIGHTS.push({ x: mx, y: 3.4, z: mz, col: 0x7dffc8, int: 1.4, d: 22, fl: 0, ph: 0, w: 1.3 });
   }
-  for (const d of world.doors) L.panel.add(TC(d.tx), WH - .5, TC(d.ty), 0, 1, 1 / WH, 1, jit(.8, 1, .04));      // lintel over every door-room door
   const mk2 = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
   mk2('shelfA', G.wall, A.lib.shelfA); mk2('shelfB', G.wall, A.lib.shelfB); mk2('shelfC', G.wall, A.lib.shelfC); mk2('panel', G.wall, A.lib.panel);
   mk2('rug', G.floor, A.lib.rug); mk2('pillar', LG.pillar, A.lib.stone); mk2('table', LG.table, A.wood); mk2('candle', LG.candle, A.lib.candle); mk2('flame', G.bloom, A.flower);
   mk2('book', LG.book, A.lib.book); mk2('lantB', G.lantB, A.lantB); mk2('lantC', G.lantC, A.lantC); mk2('web', G.quad, A.lib.web); mk2('ladder', LG.ladder, A.wood); mk2('chand', LG.chand, A.lantB);
+  { const dm = A.door; mk2('part', dm.g.part, dm.mat.paper); mk2('trim', dm.g.trim, dm.mat.trim); mk2('leaf', dm.g.leaf, dm.mat.door); mk2('hw', dm.g.hw, dm.mat.brass); }
   // one floor and one ceiling for the whole level
   const fl = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(-Math.PI / 2), A.lib.floor); fl.position.set(W * T / 2, 0, H * T / 2); root.add(fl);
   const ce = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(Math.PI / 2), A.lib.ceil); ce.position.set(W * T / 2, WH, H * T / 2); root.add(ce);
   fl.matrixAutoUpdate = ce.matrixAutoUpdate = false; fl.updateMatrix(); ce.updateMatrix();
   libFoyer(root, world, glowL);
-  doorsBuild(root, world, { wood: 0x8a6a48, band: 0x9a7a30 }); itemsBuild(root, world);
   buildGates(root, world);
   world.scares = findScareSpots(world);
   if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
@@ -369,7 +529,8 @@ function libTeardown() {
   const w = world; if (!w) return;
   if (w.root) {
     scene.remove(w.root);
-    const sg = new Set([...Object.values(G), ...Object.values(LG), ...Object.values(CG)]), sm = new Set(); for (const k in A) if (A[k] && A[k].isMaterial) sm.add(A[k]); for (const set of [A.lib, A.cas]) if (set) for (const k in set) if (set[k] && set[k].isMaterial) sm.add(set[k]);
+    const sg = new Set(Object.values(G)), sm = new Set(); for (const k in A) if (A[k] && A[k].isMaterial) sm.add(A[k]); if (A.lib) for (const k in A.lib) if (A.lib[k] && A.lib[k].isMaterial) sm.add(A.lib[k]);
+    if (A.door) { for (const k in A.door.mat) sm.add(A.door.mat[k]); for (const k in A.door.g) sg.add(A.door.g[k]); }
     w.root.traverse(o => {
       if (o.isInstancedMesh && o.dispose) o.dispose();
       if (o.geometry && !sg.has(o.geometry)) o.geometry.dispose();
@@ -384,38 +545,26 @@ function libTeardown() {
 }
 function libEnv(w) {        // fog, background, ambient light and sky for whichever level you are on
   scene.fog.color.setHex(w.fogColor || 0x03070a); scene.background.setHex(w.fogColor || 0x02050a); scene.fog.density = w.fogD || .04;
-  hemi.color.setHex(w.hemiCol || (w.lib ? 0x6a5030 : 0x3b5f6e)); hemi.groundColor.setHex(w.hemiGnd || (w.lib ? 0x1a110a : 0x10170f));
+  hemi.color.setHex(w.lib ? 0x6a5030 : 0x3b5f6e); hemi.groundColor.setHex(w.lib ? 0x1a110a : 0x10170f);
   for (const o of SKYOBJ) o.visible = !w.lib;
 }
-// Every open gate leads to the next level: 0 garden -> 1 library -> 2 castle -> 3 garden -> 4 library -> 5 castle -> ... (new seed each time, same for the whole room)
-const LV_KINDS = ['garden', 'library', 'castle'], LV_NAMES = ['The Garden', 'The Library', 'The Castle'];
-const lvKind = (n) => n % 3;
 async function libEnter() {
-  if (lvBusy || !world || !started) return; lvBusy = true;
-  const n = LV + 1, kind = lvKind(n), indoor = kind !== 0;
+  if (lvBusy || LV !== 0 || !world || !started) return; lvBusy = true;
   P.freeze = true; keys.clear(); joy.x = joy.y = 0; touchSprint = false; Torch.shaking = false;
-  Aud.shift(); libFade(true, 'LEVEL ' + (n + 1), LV_NAMES[kind]);
+  Aud.shift(); libFade(true, 'LEVEL 2', 'The Library');
   await wait(1100);
-  try {
-    libTeardown(); LV = n;
-    Torch.fault = false; Torch.dead = false; Torch.ft = 0; Torch.prog = 0; Torch.k = 1; Torch.next = TORCH.first;   // fresh flashlight on every new level
-    if (kind === 1) world = libBuild(libGen(mulberry32(hashStr(code + '|library' + (n > 1 ? '|' + n : '')))), Q);
-    else if (kind === 2) world = casBuild(casGen(mulberry32(hashStr(code + '|castle|' + n))), Q);
-    else { GW = 41; GH = 31; world = buildWorld(genWorld(mulberry32(hashStr(code + '|garden|' + n))), Q); }
-    const w = world;
-    explored = new Uint8Array(GW * GH); doorsReset(); itemsReset();
-    const mm = $('#mm'); mm.width = GW * (w.mmS || 5); mm.height = GH * (w.mmS || 5);
-    libEnv(w);
-    const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = indoor ? -Math.PI / 2 : Math.PI / 4; P.pitch = 0; P.flickT = .5;
-    if (Mim.st !== 'idle') mimicEnd(); Mim.t = Math.max(Mim.t, 75);
-    if (Scare.act) endScare(); Scare.quiet = 35;
-    applyRes(); startT = tNow; await frame();
-    net.set({ lv: LV, x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, e: 0 });
-    await wait(500); libFade(false); toast('Level ' + (n + 1) + ' \u2014 ' + LV_NAMES[kind].replace('The', 'the') + '. Find the way out.');
-  } catch (err) {
-    console.error('[hollow] level failed to build', err);
-    libFade(true, 'LEVEL FAILED TO LOAD', String(err && err.message || err)); lvBusy = false; return;
-  }
+  libTeardown(); LV = 1;
+  const w = libGen(mulberry32(hashStr(code + '|library')));
+  world = libBuild(w, Q);
+  explored = new Uint8Array(GW * GH);
+  const mm = $('#mm'); mm.width = GW * w.mmS; mm.height = GH * w.mmS;
+  libEnv(w);
+  const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = -Math.PI / 2; P.pitch = 0; P.flickT = .5;
+  if (Mim.st !== 'idle') mimicEnd(); Mim.t = Math.max(Mim.t, 75);
+  if (Scare.act) endScare(); Scare.quiet = 35;
+  applyRes(); startT = tNow; await frame();
+  net.set({ lv: 1, x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, e: 0 });
+  await wait(500); libFade(false); toast('Level 2 — the Library. Find the way out.');
   P.freeze = false; lvBusy = false;
 }
   </script>

@@ -68,7 +68,7 @@ function genWorld(R) {
     sites.push({ tx: got[0], ty: got[1], x: (got[0] + 2.5) * T, z: (got[1] + 2.5) * T });
   }
   const sizes = [5, 5, 7, 5, 7];
-  for (let n = 0; n < 6; n++) {            // open groves / gardens (the other rooms are the door rooms, see doors.html)
+  for (let n = 0; n < 9; n++) {
     const w = pick(sizes, R), h = pick(sizes, R);
     for (let k = 0; k < 60; k++) {
       const nx = Math.floor((GW - 1 - w - X0) / 2) + 1, ny = Math.floor((GH - 1 - h - 1) / 2) + 1;
@@ -78,8 +78,7 @@ function genWorld(R) {
       if (ok) { place(x0, y0, w, h, R() < .45 ? 3 : 2); break; }
     }
   }
-  const dd = doorsGen(g, tt, new Uint8Array(GW * GH), rooms, GW, GH, R, { sx: 9, sy: 15, minX: 11, count: DOOR.gardenRooms, sizes: DOOR.gardenSizes, obst: [2, 0] });   // closed-off rooms with a door (see doors.html); hedges inside
-  return { g, tt, rooms, R, sites, exit: sites[0], doors: dd.list, dm: dd.dm, items: dd.items };
+  return { g, tt, rooms, R, sites, exit: sites[0] };
 }
 
 function glowPoints(list, size, tex) {
@@ -186,16 +185,15 @@ function buildWorld(world, Q) {
     const cx = (r.x0 + r.w / 2) * T, cz = (r.y0 + r.h / 2) * T;
     LIGHTS.push({ x: cx, y: 6.5, z: cz, col: r.type === 4 ? 0x7dffc8 : 0x7da4ff, int: 1.55, d: r.w > 5 || r.h > 5 ? 25 : 21, fl: 0, ph: 0, w: 1.3 });
   }
-  for (const d of world.doors || []) L.wall.add(TC(d.tx), WH - .5, TC(d.ty), 0, 1, 1 / WH, 1, jit(.72, 1, .06));      // lintel over every door-room door
   const mkI = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
   mkI('wall', G.wall, A.wall); mkI('hedge', G.hedge, A.hedge); mkI('fStone', G.floor, A.floorStone); mkI('fGrass', G.floor, A.floorGrass); mkI('fMoss', G.floor, A.floorMoss); mkI('ceil', G.ceil, A.ceil);
   mkI('ivy', G.quad, A.ivy); mkI('vine', G.vine, A.vine); mkI('tuft', G.tuft, A.tuft); mkI('fern', G.fern, A.fern); mkI('leafy', G.leafy, A.leafy);
   mkI('bush', G.bush, A.bush); mkI('stem', G.stem, A.stem); mkI('bloom', G.bloom, A.flower); mkI('mcap', G.mcap, A.mcap); mkI('mstem', G.mstem, A.mstem);
   mkI('trunk', G.trunk, A.trunk); mkI('canopy', G.canopy, A.canopy); mkI('lantB', G.lantB, A.lantB); mkI('lantC', G.lantC, A.lantC);
 
-  // ---- special places: start room + exit gate + the door rooms
-  buildStartRoom(root, glowL, glowS);
-  doorsBuild(root, world, { wood: 0x5a4a36, band: 0x2a3a2a }); itemsBuild(root, world);
+  // ---- special places: start room + exit gate
+  world.walls = [];
+  buildStartRoom(root, glowL, glowS, world);
   buildGates(root, world);
   world.scares = findScareSpots(world);
   if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
@@ -209,7 +207,7 @@ function buildWorld(world, Q) {
   return world;
 }
 
-function buildStartRoom(root, glowL, glowS) {
+function buildStartRoom(root, glowL, glowS, world) {
   const std = (c, r = .8) => LitMat({ color: c, roughness: r });
   const box = (w, h, d, x, y, z, m, ry = 0) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.rotation.y = ry; root.add(b); return b; };
   // corner lamp (NW corner of the starting room)
@@ -226,10 +224,8 @@ function buildStartRoom(root, glowL, glowS) {
   box(.8, .8, .8, 5.1 * T, .4, 16.5 * T, A.wood, .4); box(.7, .7, .7, 5.1 * T + .2, 1.15, 16.5 * T, A.wood, .9); box(.9, .9, .9, 2 * T, .45, 16.6 * T, A.wood, .2); box(.6, .6, .6, 4.8 * T, .3, 13.3 * T, A.wood, .7);
   box(1.9, .35, .85, 2.2 * T, .3, 14.4 * T - .1, std(0x3a3328, 1), 0);                                     // cot
   box(1.5, .1, .7, 2.2 * T - .1, .52, 14.4 * T - .1, std(0x56604a, 1), 0);
-  // door frame between the room and the hallway
-  const dx = 6 * T + .15, dz = 15.5 * T;
-  box(.25, 3.4, .25, dx, 1.7, dz - T / 2 + .1, A.wood); box(.25, 3.4, .25, dx, 1.7, dz + T / 2 - .1, A.wood); box(.3, .3, T, dx, 3.4, dz, A.wood);
-  box(.08, 3.1, 1.5, dx - .3, 1.55, dz - T / 2 + .95, A.wood, -.9);                                         // door left ajar
+  // the door between the room and the hallway: a real panelled door in a wall of its own, left ajar
+  doorSingle(root, world, 6, 15, -1, 0, { hs: -1, sw: 1, al: .9 });
   // lantern right outside the door, so the way is faintly lit
   const hx = 8 * T + .4, hz = 15.5 * T - T / 2 + .2;
   box(.2, .34, .2, hx, 2.3, hz, std(0x1a1a18, .5));
@@ -254,6 +250,7 @@ function buildGates(root, world) {
   x.font = '600 54px Cinzel, Georgia, serif'; x.textAlign = 'center'; x.fillStyle = 'rgba(170,255,225,0.95)'; x.shadowColor = '#4dffc0'; x.shadowBlur = 18; x.fillText('THE WAY OUT', 256, 64);
   const signTex = new THREE.CanvasTexture(c);
   world.gates = world.sites.map((st, i) => {
+    if (world.lib) return libGate(root, world, st, i, signTex);      // the library's way out is a door, not an arch
     const gx = st.x, gz = st.z;
     const grp = new THREE.Group(); grp.position.set(gx, 0, gz); root.add(grp);
     for (const sd of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(.55, 2.6, .55), stone); p.position.set(0, 1.3, sd * 1.65); grp.add(p); }
@@ -345,7 +342,6 @@ function drawMap() {
     if (!explored[ty * GW + tx]) continue; const v = world.g[ty * GW + tx], tp = world.tt[ty * GW + tx];
     if (world.lib) {      // the library has its own colours
       const k = world.kd[ty * GW + tx];
-      if (world.castle) { x.fillStyle = v === 1 ? (k === 0 ? '#1d2027' : k === 1 ? '#444a58' : k === 3 ? '#8a6a2a' : '#4a3a28') : tp === 6 ? ((Math.abs(tx - ax.tx) <= 4 && Math.abs(ty - ax.ty) <= 4) ? '#35d6a0' : '#3a463d') : tp === 5 ? '#3a4260' : tp === 2 ? '#3a2a30' : tp === 1 ? '#4a4435' : '#2c3037'; x.fillRect(tx * s, ty * s, s, s); continue; }
       x.fillStyle = v === 1 ? (k === 0 ? '#2b1d14' : k === 1 ? '#3c3c44' : '#5a4028') : tp === 6 ? ((Math.abs(tx - ax.tx) <= 4 && Math.abs(ty - ax.ty) <= 4) ? '#35d6a0' : '#3a463d') : tp === 5 ? '#6a4a2a' : tp === 2 ? '#5a2a2a' : tp === 1 ? '#4a4435' : '#3a3228';
       x.fillRect(tx * s, ty * s, s, s); continue;
     }

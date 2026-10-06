@@ -920,7 +920,6 @@
       color: var(--mute)
     }
 
-    .lbl.lbl0 { margin-top: 0; }
     .lbl {
       font-size: 11px;
       letter-spacing: .14em;
@@ -1422,7 +1421,7 @@
       </svg></div>
     <div class="xh"></div>
     <div id="bl">
-      <div class="lbl lbl0"><span>Health</span><span id="hpN">100</span></div>
+      <div class="lbl" style="margin-top:0"><span>Health</span><span id="hpN">100</span></div>
       <div class="bar2 hp">
         <div id="hpFill"></div>
       </div>
@@ -1443,7 +1442,7 @@
     <div id="shakeUI" class="hide"><span id="shakeTxt"></span>
       <div class="bar"><i id="shakeBar"></i></div>
     </div>
-    <div id="hint">WASD move · Shift sprint · Space jump · F flashlight · Right mouse shake torch · E pick up / open doors · 1-5 hotbar (wheel to cycle, click or R to use) · Q / E / G perk keys · V mute mic · Esc menu</div>
+    <div id="hint">WASD move · Shift sprint · Space jump · F flashlight · Right mouse shake torch · Q / E / G perk keys · V mute mic · Esc menu</div>
   </div>
   <div id="pings"></div>
   <div id="pause" class="hide">
@@ -1504,14 +1503,14 @@
     // Loads characters.html + maps.html + entity.html before the game starts. Needs http(s): GitHub Pages, Netlify, VS Code Live Server... (not a double-clicked file://)
     (function () {
       try {
-        ['characters.html', 'maps.html', 'entity.html', 'library.html', 'castle.html', 'doors.html', 'items.html'].forEach(function (f) {
+        ['characters.html', 'maps.html', 'entity.html', 'library.html'].forEach(function (f) {
           var x = new XMLHttpRequest(); x.open('GET', f, false); x.send();
           if (x.status >= 400 || !x.responseText) throw new Error(f + ' not found');
           var el = new DOMParser().parseFromString(x.responseText, 'text/html').querySelector('script');
           var s = document.createElement('script'); s.textContent = el.textContent + '\n//# sourceURL=' + f; document.head.appendChild(s);
         });
       } catch (e) {
-        document.body.insertAdjacentHTML('beforeend', '<div class="loaderr"><b>Couldn\u2019t load characters.html / maps.html / entity.html / library.html / castle.html / doors.html / items.html.</b><br>Open the game through a web server (Live Server, GitHub Pages, Netlify) and keep all six files in the same folder.</div>');
+        document.body.insertAdjacentHTML('beforeend', '<div class="loaderr"><b>Couldn\u2019t load characters.html / maps.html / entity.html / library.html.</b><br>Open the game through a web server (Live Server, GitHub Pages, Netlify) and keep all four files in the same folder.</div>');
         throw e;
       }
     })();
@@ -1949,7 +1948,7 @@
         const T0 = Torch;
         if (paused) T0.shaking = false;
         // a fault gives no warning: the beam just starts to fade, dimmer and dimmer, until it is black
-        if (!T0.fault && !paused && !P.escaped) { T0.next -= dt; if (T0.next <= 0) { T0.fault = true; T0.dead = false; T0.ft = 0; T0.prog = 0; $('#shakeTxt').innerHTML = isTouch ? 'Your flashlight is failing — hold <b>🫨</b> to shake it' : 'Your flashlight is failing — hold <b>right mouse</b> to shake it'; } }
+        if (!T0.fault && !paused && !P.escaped) { T0.next -= dt; if (T0.next <= 0) { T0.fault = true; T0.dead = false; T0.ft = 0; T0.prog = 0; } }
         let fixed = false;
         if (T0.fault) {
           T0.ft += dt;
@@ -1972,8 +1971,8 @@
           T0.rattle -= dt; if (T0.rattle <= 0) { T0.rattle = .11; Aud.burst(1700 + Math.random() * 600, .05, .07, 2.5); }
           T0.sx = (Math.random() - .5) * .07; T0.sy = (Math.random() - .5) * .07;
         } else { T0.sx *= .6; T0.sy *= .6; }
-        $('#shakeUI').classList.toggle('hide', !T0.fault); if (T0.fault) $('#shakeBar').style.width = (T0.prog / (T0.dead ? TORCH.needDead : TORCH.need) * 100).toFixed(0) + '%';
-        if (isTouch) $('#bShake').classList.toggle('hide', !T0.fault);
+        $('#shakeUI').classList.toggle('hide', !T0.dead); if (T0.dead) $('#shakeBar').style.width = (T0.prog / TORCH.needDead * 100).toFixed(0) + '%';
+        if (isTouch) $('#bShake').classList.toggle('hide', !T0.dead);
       }
       let hemi, spot, fill, torchGroup, torchLens, pool = [], poolTimer = 0, petals = null, explored = null;
       const net = { r: null, kind: 'none', set(p) { if (this.r) this.r.presence(p).catch(() => { }); } };
@@ -2039,7 +2038,7 @@
       }
 
       // ---- collision
-      function tileV(tx, ty) { if (tx < 0 || ty < 0 || tx >= GW || ty >= GH) return 1; const i = ty * GW + tx; return (world.dm && world.dm[i]) ? 1 : world.g[i]; }      // a closed door (world.dm, see doors.html) is a wall
+      function tileV(tx, ty) { return (tx < 0 || ty < 0 || tx >= GW || ty >= GH) ? 1 : world.g[ty * GW + tx]; }
       function tileType(x, z) { const tx = Math.floor(x / T), ty = Math.floor(z / T); return (tx < 0 || ty < 0 || tx >= GW || ty >= GH) ? 0 : world.tt[ty * GW + tx]; }
       function hitCircle(x, z, r, feet) {
         const x0 = Math.floor((x - r) / T), x1 = Math.floor((x + r) / T), z0 = Math.floor((z - r) / T), z1 = Math.floor((z + r) / T);
@@ -2047,6 +2046,10 @@
           const v = tileV(tx, ty); if (v === 0) continue; if (v === 2 && feet > 1.55) continue;
           const cx = clamp(x, tx * T, (tx + 1) * T), cz = clamp(z, ty * T, (ty + 1) * T), dx = x - cx, dz = z - cz;
           if (dx * dx + dz * dz < r * r) return true;
+        }
+        const wl = world.walls; if (wl) for (let i = 0; i < wl.length; i++) {      // the thin wall pieces around doors
+          const b = wl[i]; if (x + r < b.x0 || x - r > b.x1 || z + r < b.z0 || z - r > b.z1) continue;
+          const dx = x - clamp(x, b.x0, b.x1), dz = z - clamp(z, b.z0, b.z1); if (dx * dx + dz * dz < r * r) return true;
         }
         return false;
       }
@@ -2208,15 +2211,13 @@
         P.pingCd = 6; const i = ++P.pingId, acc = SKINS[me.skin].accent;
         spawnPing(P.x, P.z, acc, me.name); Aud.ping(); net.set({ pg: { i, x: +P.x.toFixed(2), z: +P.z.toFixed(2) } });
       }
-      function actFlare() { if (!has('flares')) return; if (P.flares <= 0) { toast('No flares left'); return; } if (launchFlare()) P.flares--; }
-      function launchFlare() {      // throws one flare (used by the Flares perk and by the Flare item in the hotbar); false if it is still cooling down
-        if (P.flareCd > 0) return false;
-        P.flareCd = .6; const i = ++P.flareId, acc = SKINS[me.skin].accent;
+      function actFlare() {
+        if (!has('flares')) return; if (P.flares <= 0) { toast('No flares left'); return; } if (P.flareCd > 0) return;
+        P.flares--; P.flareCd = .6; const i = ++P.flareId, acc = SKINS[me.skin].accent;
         const cp = Math.cos(P.pitch), dx = -Math.sin(P.yaw) * cp, dy = Math.sin(P.pitch), dz = -Math.cos(P.yaw) * cp;
         const x = P.x + dx * .5, y = 1.5 + P.y + dy * .5, z = P.z + dz * .5, vx = dx * 8, vy = dy * 8 + 2.6, vz = dz * 8;
         spawnFlare(x, y, z, vx, vy, vz, acc); Aud.flare();
         const r2 = (n) => +n.toFixed(2); net.set({ fl: { i, x: r2(x), y: r2(y), z: r2(z), vx: r2(vx), vy: r2(vy), vz: r2(vz) } });
-        return true;
       }
       window.addEventListener('keydown', (e) => {
         if (!started) return;
@@ -2224,7 +2225,7 @@
         if (paused) return;
         if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
         if (keys.has(e.code)) return; keys.add(e.code);
-        if (e.code === 'KeyF') actFlash(); else if (e.code === 'KeyQ') actNight(); else if (e.code === 'KeyE') { if (!itemInteract() && !doorInteract()) actBeacon(); } else if (e.code === 'KeyG') actFlare();
+        if (e.code === 'KeyF') actFlash(); else if (e.code === 'KeyQ') actNight(); else if (e.code === 'KeyE') actBeacon(); else if (e.code === 'KeyG') actFlare();
       });
       window.addEventListener('keyup', (e) => keys.delete(e.code));
       window.addEventListener('blur', () => keys.clear());
@@ -2245,7 +2246,7 @@
         window.addEventListener('touchstart', (e) => {
           if (!started || paused) return;
           for (const t of e.changedTouches) {
-            if (t.target.closest && t.target.closest('.tb, #hotbar')) continue;
+            if (t.target.closest && t.target.closest('.tb')) continue;
             if (t.clientX < innerWidth * .45 && sid === null) { sid = t.identifier; so = { x: t.clientX, y: t.clientY }; stick.style.left = (t.clientX - 55) + 'px'; stick.style.top = (t.clientY - 55) + 'px'; stick.classList.add('on'); }
             else if (t.clientX >= innerWidth * .45 && lid === null) { lid = t.identifier; lp = { x: t.clientX, y: t.clientY }; }
           }
@@ -2295,7 +2296,7 @@
         if (!outdoor && P.y > WH - 1.9) { P.y = WH - 1.9; P.vy = Math.min(P.vy, 0); }
         if (P.y <= gh) { P.y = gh; P.vy = 0; P.grounded = true; } else if (P.y > gh + .02) P.grounded = false;
         // steps + bob
-        if (P.grounded && moved > 0) { P.stepAcc += moved; P.bob += moved * 2.6; if (P.stepAcc > (sprinting ? 2.3 : 1.8)) { P.stepAcc = 0; Aud.step((sprinting ? 1 : .6) * (me.q === 'loud' ? 1.6 : 1), world.castle ? 'stone' : world.lib ? 'wood' : tp === 3 || tp === 4 ? 'grass' : tp === 2 ? 'moss' : 'stone'); } }
+        if (P.grounded && moved > 0) { P.stepAcc += moved; P.bob += moved * 2.6; if (P.stepAcc > (sprinting ? 2.3 : 1.8)) { P.stepAcc = 0; Aud.step((sprinting ? 1 : .6) * (me.q === 'loud' ? 1.6 : 1), LV ? 'wood' : tp === 3 || tp === 4 ? 'grass' : tp === 2 ? 'moss' : 'stone'); } }
         else P.bob += 0;
         // camera
         const bobY = P.grounded ? Math.sin(P.bob) * .035 * Math.min(1, P.speed / 3) : 0;
@@ -2308,7 +2309,7 @@
         P.flickT -= dt; if (P.flickT <= 0 && Math.random() < .004) P.flickT = .18;
         const fk = (P.flickT > 0 ? (.15 + Math.random() * .9) : 1) * Torch.k;
         spot.visible = P.flash; spot.intensity = 2.4 * (lant ? 1.5 : 1) * (me.q === 'nightblind' ? .55 : 1) * fk; spot.angle = lant ? .64 : .5; spot.distance = (lant ? 54 : 40) * (.4 + .6 * Torch.k);
-        fill.intensity = (.18 + .22 * (P.flash ? Torch.k : 0) + (Torch.fault ? .3 * (1 - Torch.k) : 0)) + (has('warmsoul') ? .9 : 0);
+        fill.intensity = (.18 + .22 * (P.flash ? Torch.k : 0)) + (has('warmsoul') ? .9 : 0);
         { const kk = P.flash ? Torch.k : 0; torchLens.material.color.setRGB(.27 + .73 * kk, .27 + .69 * kk, .27 + .58 * kk); } torchGroup.position.set(.25 + Torch.sx, -.22 + Torch.sy, -.45); torchGroup.rotation.z = Torch.sx * 4;
         // night eyes
         if (P.night) { P.energy -= 9 * dt; if (P.energy <= 0) { P.energy = 0; P.night = false; $('#nv').classList.remove('on'); toast('Night Eyes exhausted'); } }
@@ -2323,8 +2324,8 @@
         const ptx = Math.floor(P.x / T), pty = Math.floor(P.z / T);
         for (let y = -3; y <= 3; y++)for (let x = -3; x <= 3; x++) { const nx = ptx + x, ny = pty + y; if (nx >= 0 && ny >= 0 && nx < GW && ny < GH && x * x + y * y <= 10) explored[ny * GW + nx] = 1; }
         // the way out (the open gate moves on a schedule — see updateGates in maps.html) + jumpscares
-        updateGates(dt, t); updateScares(dt); updateDoors(dt); updateItems(dt, t);
-        if (!P.escaped && !P.freeze && gateOpen() && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) libEnter();   // every gate -> the next level (see library.html)
+        updateGates(dt, t); updateScares(dt);
+        if (!P.escaped && !P.freeze && gateOpen() && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) { if (LV === 0) libEnter(); else doEscape(); }   // garden gate -> the library (library.html) · library gate -> out
         // network
         sendT += dt; if (sendT > .08) { sendT = 0; const r2 = (n) => +n.toFixed(2); net.set({ x: r2(P.x), y: r2(P.y), z: r2(P.z), ry: r2(P.yaw), rp: r2(P.pitch), f: P.flash ? +Math.max(0, Math.min(1, Torch.k)).toFixed(1) : 0 }); }
         // HUD
@@ -2376,7 +2377,7 @@
         };
         row(me.name, accHex(), P.escaped ? '✓ out' : 'you', true);
         for (const r of remotes.values()) { row(r.name, '#' + new THREE.Color(r.sk.accent).getHexString(), r.pr.e ? '✓ out' : Math.round(Math.hypot(r.x - P.x, r.z - P.z)) + ' m'); }
-        if (netOn) $('#room').textContent = `ROOM ${code} · ${remotes.size + 1} explorer${remotes.size ? 's' : ''}${world.lib ? (world.castle ? ' · CASTLE' : ' · LIBRARY') : ''}${LV > 1 ? ' · LVL ' + (LV + 1) : ''}`; else $('#room').textContent = 'SOLO' + (world.lib ? (world.castle ? ' · CASTLE' : ' · LIBRARY') : '') + (LV > 1 ? ' · LVL ' + (LV + 1) : '');
+        if (netOn) $('#room').textContent = `ROOM ${code} · ${remotes.size + 1} explorer${remotes.size ? 's' : ''}${LV ? ' · LIBRARY' : ''}`; else $('#room').textContent = LV ? 'SOLO · LIBRARY' : 'SOLO';
       }
       // [moved to maps.html]
 
@@ -2744,42 +2745,19 @@
       function applyAll() { camera.fov = CFG.fov; camera.updateProjectionMatrix(); applyRes(); applyLights(); if (Aud.m) Aud.m.gain.value = CFG.vol / 100; $('#grain').style.display = CFG.grain ? '' : 'none'; if (!CFG.fps) $('#fps').classList.add('hide'); }
       // ---- per-frame culling. Chunks (see IL.build) are hidden when they are behind you or too far away.
       // Small detail is dropped sooner than walls: by then it is mostly fog anyway. Levels can cap the distance too (world.maxDist).
-      const LOD_CAPS = { tuft: 24, fern: 24, bush: 22, stem: 20, bloom: 20, mcap: 18, mstem: 18, ivy: 32, vine: 30, leafy: 28, lantB: 34, lantC: 34, web: 22, ladder: 28, candle: 24, flame: 24, book: 20, chand: 34, sconce: 30, banA: 30, banB: 30, banC: 30, armor: 26, chain: 26, slit: 30, brazier: 30 };
-      let visChunks = 0;
-      // ---- if one object has a broken geometry, three.js throws and the WHOLE frame stays black (it only happens while that object is in view,
-      // which is why it seemed to depend on the direction you look). We find the culprit(s), switch them off and keep rendering.
-      const BAD = new WeakSet(); let badN = 0, healAt = 0;
-      function describeBad(o) {
-        const ch = CHUNKS.find(c => c.m === o), g = o.geometry, nul = g && g.attributes ? Object.keys(g.attributes).filter(k => !g.attributes[k]) : ['(no attributes)'];
-        return (ch ? 'chunk:' + ch.cat : o.type) + ' geo:' + (g ? g.type : 'none') + (nul.length ? ' nullAttr:' + nul.join(',') : '') + (o.isInstancedMesh && !o.instanceMatrix ? ' noInstanceMatrix' : '');
-      }
-      function healRender(err) {
-        const cands = []; scene.traverse(o => { if ((o.isMesh || o.isPoints || o.isLine) && o.geometry && o.visible && !BAD.has(o)) cands.push(o); });
-        const was = cands.map(o => o.visible); cands.forEach(o => { o.visible = false; });
-        const bad = [];
-        for (const o of cands) { o.visible = true; try { renderer.render(scene, camera); } catch (e) { bad.push(o); } o.visible = false; }
-        cands.forEach((o, i) => { o.visible = was[i]; });
-        for (const o of bad) { BAD.add(o); o.visible = false; badN++; console.warn('[hollow] switched off a broken object:', describeBad(o), o); }
-        if (!bad.length) { console.error('[hollow] render failed and no single object is to blame:', err); healAt = tNow + 5; }
-        return bad.length;
-      }
-      function safeRender() {
-        try { renderer.render(scene, camera); }
-        catch (err) { if (tNow < healAt) return; healAt = tNow + .4; if (healRender(err)) { try { renderer.render(scene, camera); } catch (e2) { } } }
-      }
+      const LOD_CAPS = { tuft: 24, fern: 24, bush: 22, stem: 20, bloom: 20, mcap: 18, mstem: 18, ivy: 32, vine: 30, leafy: 28, lantB: 34, lantC: 34, web: 22, ladder: 28, candle: 24, flame: 24, book: 20, chand: 34 };
       function cullChunks() {
         camera.updateMatrixWorld(); camera.matrixWorldInverse.copy(camera.matrixWorld).invert();     // this frame's view, not last frame's (stops edge flicker when turning)
         pvm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse); frustum.setFromProjectionMatrix(pvm);
         const cp = camera.position, D = Math.min(CFG.dist, world.maxDist || 1e9), nf = P.night ? 1.35 : 1;
-        for (const c of CHUNKS) { const cap = LOD_CAPS[c.cat] ? Math.min(D, LOD_CAPS[c.cat] * nf) : D; c.m.visible = !BAD.has(c.m) && cp.distanceTo(c.sph.center) - c.sph.radius < cap && frustum.intersectsSphere(c.sph); }
-        visChunks = 0; for (const c of CHUNKS) if (c.m.visible) visChunks++;
+        for (const c of CHUNKS) { const cap = LOD_CAPS[c.cat] ? Math.min(D, LOD_CAPS[c.cat] * nf) : D; c.m.visible = cp.distanceTo(c.sph.center) - c.sph.radius < cap && frustum.intersectsSphere(c.sph); }
       }
       // ---- automatic resolution: drops quickly when the frame rate sags, creeps back up slowly (and not for 20 s after a drop, so it doesn't bounce)
       let startT = 0, noRaise = 0; const AK_MIN = .45;
       function perfTick(r) {
         fpsAcc += r; fpsN++; if (fpsAcc < .7) return;
         const fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
-        if (CFG.fps) { const el = $('#fps'); el.classList.remove('hide'); el.textContent = Math.round(fps) + ' FPS · ' + Math.round(curPR() * 100) + '% · L' + (LV + 1) + ' · chunks ' + visChunks + '/' + CHUNKS.length + (badN ? ' · BROKEN ' + badN : '') + ' · torch ' + Torch.k.toFixed(2) + (Torch.dead ? ' DEAD' : Torch.fault ? ' FAULT' : '') + ' · ' + CARD[Math.round((((-P.yaw * 180 / Math.PI) % 360 + 360) % 360) / 45) % 8]; }
+        if (CFG.fps) { const el = $('#fps'); el.classList.remove('hide'); el.textContent = Math.round(fps) + ' FPS · ' + Math.round(curPR() * 100) + '%'; }
         if (!started || paused || !CFG.auto || lvBusy) return;
         if (tNow < startT + 4) return;                         // ignore the first seconds of a level: shader compiles and texture uploads
         if (fps < 52) { upN = 0; if (autoK > AK_MIN && tNow > adaptT) { autoK = Math.max(AK_MIN, autoK - (fps < 35 ? .15 : fps < 45 ? .1 : .05)); adaptT = tNow + 1.3; noRaise = tNow + 20; applyRes(); } }
@@ -2805,7 +2783,7 @@
         if (!world || !previewAv && !started) return;
         if (started) update(dt, t); else previewCam(t);
         updatePool(dt, t); updateFlares(dt); updateRemotes(dt, t); updateMimic(dt, t); vcFrame(); updatePings(dt); if (petals) updatePetals(dt);
-        cullChunks(); safeRender();
+        cullChunks(); renderer.render(scene, camera);
       }
       resize(); requestAnimationFrame(loop);
   </script>
