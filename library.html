@@ -303,8 +303,8 @@ function doorAdd(S, tx, ty, rx, rz, o = {}) {
   const hs = o.hs || -1, sw = o.sw || 1, al = o.al == null ? 1 : o.al;
   S.part.add(cx, 0, cz, th, 1, 1, 1, o.tint || 0xffffff); S.trim.add(cx, 0, cz, th, 1, 1, 1, o.tint2 || 0xffffff);
   const [hx, hz] = loc(hs * D.HX, 0), yaw = th + (hs < 0 ? 0 : Math.PI) + (hs < 0 ? -1 : 1) * sw * al;
-  S.leaf.add(hx, 0, hz, yaw, 1, 1, 1, o.leafTint || 0xffffff); S.hw.add(hx, 0, hz, yaw, 1, 1, 1, 0xffffff);
-  return { cx, cz, th, rx, rz, loc };
+  const hl = S.leaf.add(hx, 0, hz, yaw, 1, 1, 1, o.leafTint || 0xffffff), hh = S.hw.add(hx, 0, hz, yaw, 1, 1, 1, 0xffffff);
+  return { cx, cz, th, rx, rz, loc, hl, hh, hs, hx, hz, base: th + (hs < 0 ? 0 : Math.PI) };
 }
 function doorWalls(out, d) {             // the solid wall either side of the opening, so you can't walk through it
   const D = DOOR, a = D.OW / 2 - .04, b = T / 2, ht = D.TH / 2;
@@ -315,10 +315,42 @@ function doorWalls(out, d) {             // the solid wall either side of the op
   }
 }
 function doorSingle(root, world, tx, ty, rx, rz, o) {      // one stand-alone door (the garden's starting room)
-  const m = doorAssets(Q), mkS = (geo, mat) => ({ add(x, y, z, ry) { const b = new THREE.Mesh(geo, mat); b.position.set(x, y, z); b.rotation.y = ry; root.add(b); } });
+  const m = doorAssets(Q), mkS = (geo, mat) => ({ add(x, y, z, ry) { const b = new THREE.Mesh(geo, mat); b.position.set(x, y, z); b.rotation.y = ry; root.add(b); return b; } });
   const d = doorAdd({ part: mkS(m.g.part, m.mat.paper), trim: mkS(m.g.trim, m.mat.trim), leaf: mkS(m.g.leaf, m.mat.door), hw: mkS(m.g.hw, m.mat.brass) }, tx, ty, rx, rz, o);
-  if (world) { world.walls = world.walls || []; doorWalls(world.walls, d); }
+  if (world) { world.walls = world.walls || []; doorWalls(world.walls, d); doorDyn(world, d); }
   return d;
+}
+
+// ---- working doors: they swing open as someone walks up to them (away from that person) and shut again once everyone has left ----
+const DOORM = { open: 1.65, speed: 2.5 }, _dobj = new THREE.Object3D(); _dobj.rotation.order = 'YXZ';
+function doorDyn(world, d) {
+  (world.dyn = world.dyn || []).push({ cx: d.cx, cz: d.cz, th: d.th, hx: d.hx, hz: d.hz, len: DOOR.LW, base: d.base, sgn: d.hs < 0 ? -1 : 1, dir: 1, ang: 0, want: false, yaw: d.base, hl: d.hl, hh: d.hh });
+}
+function leafSet(h, yaw) {
+  if (h.isObject3D) { h.rotation.y = yaw; return; }
+  h[3] = yaw; if (!h.m) return;
+  _dobj.position.set(h[0], h[1], h[2]); _dobj.rotation.set(0, yaw, 0); _dobj.updateMatrix(); h.m.setMatrixAt(h.i, _dobj.matrix); h.m.instanceMatrix.needsUpdate = true;
+}
+function updateDoors(dt) {
+  const ds = world.dyn; if (!ds) return;
+  const who = [[P.x, P.z]]; for (const r of remotes.values()) who.push([r.x, r.z]);
+  for (const d of ds) {
+    const cs = Math.cos(d.th), sn = Math.sin(d.th); let near = false, side = 0;
+    for (const [x, z] of who) {
+      const dx = x - d.cx, dz = z - d.cz, lat = dx * cs - dz * sn, al = dx * sn + dz * cs;      // across the doorway / along it (+ = room side)
+      if (Math.abs(lat) < (d.want ? 2.6 : 1.9) && Math.abs(al) < (d.want ? 3.8 : 2.6)) { near = true; side = al; break; }
+    }
+    if (near && !d.want && d.ang < .02) d.dir = side > 0 ? -1 : 1;                                // swing away from whoever opened it
+    if (near !== d.want) {
+      d.want = near;
+      if (Math.hypot(P.x - d.cx, P.z - d.cz) < 10) { if (near) { Aud.tone(150, 92, .5, .035, 'sawtooth'); Aud.burst(650, .28, .09, .9); } }
+    }
+    const tgt = d.want ? DOORM.open : 0;
+    if (d.ang === tgt) continue;
+    const was = d.ang; d.ang += Math.max(-DOORM.speed * dt, Math.min(DOORM.speed * dt, tgt - d.ang));
+    d.yaw = d.base + d.sgn * d.dir * d.ang; leafSet(d.hl, d.yaw); leafSet(d.hh, d.yaw);
+    if (was > 0 && d.ang === 0 && Math.hypot(P.x - d.cx, P.z - d.cz) < 10) { Aud.burst(150, .18, .26, .8); Aud.tone(90, 55, .2, .07); }       // the latch
+  }
 }
 
 // the way out in the library: a door in the east wall of the exit hall, standing ajar with the light of the other side spilling through
@@ -467,11 +499,11 @@ function libBuild(world, Q) {
   }
   // doors: a wallpapered partition, casing, a hinged leaf and brass hardware in every doorway
   for (const d of [...world.doors, world.exitDoor]) {
-    const o = d.exit ? { hs: -1, sw: 1, al: 1.0 } : d.foyer ? { hs: 1, sw: 1, al: 1.35 } : { hs: R() < .5 ? -1 : 1, sw: R() < .65 ? 1 : -1, al: .5 + R() * .95 };
+    const o = d.exit ? { hs: -1, sw: 1, al: 1.0 } : d.foyer ? { hs: 1, sw: 1, al: 0 } : { hs: R() < .5 ? -1 : 1, sw: 1, al: 0 };
     o.tint = jit(.8, 1, .05); o.tint2 = jit(.8, 1, .06); o.leafTint = jit(.78, 1, .14);
     const D0 = doorAdd(L, d.tx, d.ty, d.rx, d.rz, o);
     if (d.exit) { d.cx = D0.cx; d.cz = D0.cz; d.th = D0.th; continue; }
-    doorWalls(world.walls, D0);
+    doorWalls(world.walls, D0); doorDyn(world, D0);
     if (d.foyer) continue;
     const lat = (R() < .5 ? -1 : 1) * 1.18;
     for (const side of [-1, 1]) {            // a wall lantern beside the door: -1 on the corridor face, +1 on the room face

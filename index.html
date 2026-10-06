@@ -1695,7 +1695,7 @@
 
       class IL { // instance list
         constructor() { this.a = []; this.hasC = false; this.cat = ''; this.cs = 0; }
-        add(x, y, z, ry = 0, sx = 1, sy = sx, sz = sx, col = null, rx = 0, rz = 0) { this.a.push([x, y, z, ry, sx, sy, sz, col, rx, rz]); if (col) this.hasC = true; }
+        add(x, y, z, ry = 0, sx = 1, sy = sx, sz = sx, col = null, rx = 0, rz = 0) { const e = [x, y, z, ry, sx, sy, sz, col, rx, rz]; this.a.push(e); if (col) this.hasC = true; return e; }
         build(geo, mat, parent) {
           if (!this.a.length) return null;
           const groups = new Map(), CS = this.cs || 16;
@@ -1705,7 +1705,7 @@
           for (const arr of groups.values()) {
             const m = new THREE.InstancedMesh(geo, mat, arr.length); let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9, z0 = 1e9, z1 = -1e9, ms = 1;
             arr.forEach((e, i) => {
-              d.position.set(e[0], e[1], e[2]); d.rotation.set(e[8], e[3], e[9]); d.scale.set(e[4], e[5], e[6]); d.updateMatrix(); m.setMatrixAt(i, d.matrix);
+              d.position.set(e[0], e[1], e[2]); d.rotation.set(e[8], e[3], e[9]); d.scale.set(e[4], e[5], e[6]); d.updateMatrix(); m.setMatrixAt(i, d.matrix); e.m = m; e.i = i;
               if (this.hasC) { c.set(e[7] || 0xffffff); m.setColorAt(i, c); }
               x0 = Math.min(x0, e[0]); x1 = Math.max(x1, e[0]); y0 = Math.min(y0, e[1]); y1 = Math.max(y1, e[1]); z0 = Math.min(z0, e[2]); z1 = Math.max(z1, e[2]); ms = Math.max(ms, e[4], e[5], e[6]);
             });
@@ -2047,6 +2047,11 @@
           const cx = clamp(x, tx * T, (tx + 1) * T), cz = clamp(z, ty * T, (ty + 1) * T), dx = x - cx, dz = z - cz;
           if (dx * dx + dz * dz < r * r) return true;
         }
+        const dd = world.dyn; if (dd) for (let i = 0; i < dd.length; i++) {       // door leaves (a line segment from the hinge to the free edge)
+          const d = dd[i]; if (Math.abs(x - d.cx) > 2.8 || Math.abs(z - d.cz) > 2.8) continue;
+          const ax = d.hx, az = d.hz, ex = d.len * Math.cos(d.yaw), ez = -d.len * Math.sin(d.yaw), t = clamp(((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez), 0, 1);
+          const px = ax + ex * t - x, pz = az + ez * t - z; if (px * px + pz * pz < (r + .04) * (r + .04)) return true;
+        }
         const wl = world.walls; if (wl) for (let i = 0; i < wl.length; i++) {      // the thin wall pieces around doors
           const b = wl[i]; if (x + r < b.x0 || x - r > b.x1 || z + r < b.z0 || z - r > b.z1) continue;
           const dx = x - clamp(x, b.x0, b.x1), dz = z - clamp(z, b.z0, b.z1); if (dx * dx + dz * dz < r * r) return true;
@@ -2324,7 +2329,7 @@
         const ptx = Math.floor(P.x / T), pty = Math.floor(P.z / T);
         for (let y = -3; y <= 3; y++)for (let x = -3; x <= 3; x++) { const nx = ptx + x, ny = pty + y; if (nx >= 0 && ny >= 0 && nx < GW && ny < GH && x * x + y * y <= 10) explored[ny * GW + nx] = 1; }
         // the way out (the open gate moves on a schedule — see updateGates in maps.html) + jumpscares
-        updateGates(dt, t); updateScares(dt);
+        updateGates(dt, t); updateScares(dt); if (world.dyn) updateDoors(dt);
         if (!P.escaped && !P.freeze && gateOpen() && Math.abs(P.x - world.exit.x) < 1.1 && Math.abs(P.z - world.exit.z) < 1.9) { if (LV === 0) libEnter(); else doEscape(); }   // garden gate -> the library (library.html) · library gate -> out
         // network
         sendT += dt; if (sendT > .08) { sendT = 0; const r2 = (n) => +n.toFixed(2); net.set({ x: r2(P.x), y: r2(P.y), z: r2(P.z), ry: r2(P.yaw), rp: r2(P.pitch), f: P.flash ? +Math.max(0, Math.min(1, Torch.k)).toFixed(1) : 0 }); }
