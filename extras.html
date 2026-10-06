@@ -14,7 +14,8 @@
        - The Watcher: a pale figure far away; look straight at it and it is gone
        - Heartbeat: gets faster when your health is low
        - Memory fragments: glowing shards of who you were. Find all 5 on a level for a reward.
-       All of it follows the "Jumpscares" setting. Tune things in the X object below. -->
+       Level dressing (always on): flowers in the garden, books + pages in the library, balloons in the carnival.
+       The scary parts follow the "Jumpscares" setting. Tune things in the X object below. -->
   <script>
 'use strict';
 const X = {
@@ -53,7 +54,7 @@ function xWhisper(txt) {
   Aud.soft(210, 150, 1.4, .03); Aud.burst(900, .9, .02, .6); setTimeout(() => { e.style.opacity = 0; }, 3200);
 }
 function xBuild() {                                // new level -> reset timers, scatter the fragments
-  XS.wld = world; XS.got = 0; XS.black = 0; XS.flash = 0; XS.frags.forEach(f => scene.remove(f.m)); XS.frags = [];
+  XS.wld = world; propsBuild(); XS.got = 0; XS.black = 0; XS.flash = 0; XS.frags.forEach(f => scene.remove(f.m)); XS.frags = [];
   XS.tw = xr(X.whisperEvery) * .5; XS.tb = xr(X.blackEvery); XS.tt = xr(X.thunderEvery); XS.tk = xr(X.watchEvery); XS.watch = 0;
   if (XS.watcher) XS.watcher.visible = false;
   for (let i = 0; i < X.fragments; i++) {
@@ -78,6 +79,7 @@ function updateExtras(dt, t) {
       if (XS.got >= X.fragments) { P.hp = 100; P.stam = 100; Torch.dead = false; Torch.fault = false; toast('You remember enough. Health restored.'); }
     }
   }
+  propsUpdate(dt, t);
   if (!scary) { XS.el.b.style.opacity = 0; if (XS.watcher) XS.watcher.visible = false; return; }
   // whispers
   XS.tw -= dt; if (XS.tw <= 0) { XS.tw = xr(X.whisperEvery); xWhisper(); }
@@ -107,6 +109,87 @@ function updateExtras(dt, t) {
     XS.watch += dt;
     if (look > .93 && xSee(w.position.x, w.position.z)) XS.eyes += dt; else XS.eyes = Math.max(0, XS.eyes - dt * .5);
     if (XS.eyes > .9 || d < 3.5 || XS.watch > 40) { w.visible = false; if (XS.eyes > .9) { Aud.soft(90, 60, .7, .08); Scare.shake = Math.max(Scare.shake, .25); if (Math.random() < .5) xWhisper('i saw you see me'); } }
+  }
+}
+
+// ---------- level dressing: flowers (garden), books + loose pages (library), balloons (carnival) ----------
+// Same spots for everyone in a room (seeded by the room code). Walk through flowers = petals + rustle, over books = paper crunch, into a balloon = pop.
+const PR = { grp: null, bal: null, str: null, balD: [], hit: [], tk: 0 };
+const PAL = { flo: [0xff7aa8, 0xffffff, 0xffd84a, 0xb48cff, 0xff5a5a, 0x7ad0ff], book: [0x6b1f1f, 0x2d4a6b, 0x2f5a3a, 0x5a4328, 0x4a2d5a, 0x8a7a4a], bal: [0xd8333c, 0xf0c030, 0x2f7fd0, 0xe05aa0, 0x40b060] };
+function propsClear() {
+  if (PR.grp) { scene.remove(PR.grp); PR.grp.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
+  PR.grp = PR.bal = PR.str = null; PR.balD = []; PR.hit = [];
+}
+function propsInst(geo, mat, list) {
+  const m = new THREE.InstancedMesh(geo, mat, list.length), d = new THREE.Object3D(), c = new THREE.Color();
+  list.forEach((p, i) => {
+    const s = p.s || 1; d.position.set(p.x, p.y, p.z); d.rotation.set(p.rx || 0, p.ry || 0, p.rz || 0); d.scale.set(p.sx || s, p.sy || s, p.sz || s); d.updateMatrix();
+    m.setMatrixAt(i, d.matrix); m.setColorAt(i, c.setHex(p.c));
+  });
+  m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; m.frustumCulled = false; return m;
+}
+function propsBuild() {
+  propsClear();
+  const R = mulberry32(hashStr(String(code) + '|props|' + LV)), free = [], grp = PR.grp = new THREE.Group();
+  for (let y = 0; y < GH; y++)for (let x = 0; x < GW; x++) if (world.g[y * GW + x] === 0) free.push([x, y]);
+  if (!free.length) return;
+  const spot = () => { const f = free[(R() * free.length) | 0]; return [(f[0] + .5 + (R() - .5) * .7) * T, (f[1] + .5 + (R() - .5) * .7) * T]; };
+  const pick = (a) => a[(R() * a.length) | 0], n = (k) => Math.round(free.length * k);
+  if (LV === 0) {                                   // flower patches
+    const st = [], hd = [];
+    for (let i = 0, N = n(.09); i < N; i++) {
+      const [cx, cz] = spot(), col = pick(PAL.flo);
+      for (let k = 3 + ((R() * 4) | 0); k > 0; k--) {
+        const x = cx + (R() - .5) * 1.1, z = cz + (R() - .5) * 1.1, s = .7 + R() * .7;
+        st.push({ x, y: 0, z, s, rx: (R() - .5) * .3, rz: (R() - .5) * .3, c: 0x2f6a35 });
+        hd.push({ x, y: .4 * s, z, sx: s, sy: s * .55, sz: s, c: R() < .8 ? col : pick(PAL.flo) });
+        if (k === 1) PR.hit.push({ x: cx, z: cz, r: .75, c: col, f: 1 });
+      }
+    }
+    grp.add(propsInst(new THREE.CylinderGeometry(.012, .018, .4, 5).translate(0, .2, 0), LitMat({ color: 0xffffff }), st));
+    grp.add(propsInst(new THREE.SphereGeometry(.07, 7, 5), LitMat({ color: 0xffffff }), hd));
+  } else if (LV === 1) {                            // book piles + loose pages
+    const bk = [], pg = [];
+    for (let i = 0, N = n(.07); i < N; i++) {
+      const [x, z] = spot(), ry = R() * 6.28;
+      for (let k = 0, M = 1 + ((R() * 3) | 0); k < M; k++) bk.push({ x: x + (R() - .5) * .08, y: .02 + k * .042, z: z + (R() - .5) * .08, ry: ry + (R() - .5) * .6, c: pick(PAL.book) });
+      PR.hit.push({ x, z, r: .45, f: 0 });
+    }
+    for (let i = 0, N = n(.06); i < N; i++) { const [x, z] = spot(); pg.push({ x, y: .006 + R() * .012, z, ry: R() * 6.28, c: 0xd8d2bc }); PR.hit.push({ x, z, r: .35, f: 0 }); }
+    grp.add(propsInst(new THREE.BoxGeometry(.2, .04, .28), LitMat({ color: 0xffffff }), bk));
+    grp.add(propsInst(new THREE.PlaneGeometry(.2, .28).rotateX(-Math.PI / 2), LitMat({ color: 0xffffff, side: THREE.DoubleSide }), pg));
+  } else if (LV === 2) {                            // tethered balloons
+    const bl = [], sl = [];
+    for (let i = 0, N = n(.035); i < N; i++) {
+      const [bx, bz] = spot();
+      for (let k = 1 + ((R() * 3) | 0); k > 0; k--) {
+        const h = 1.2 + R() * 1.3, x = bx + (R() - .5) * .3, z = bz + (R() - .5) * .3, c = pick(PAL.bal);
+        PR.balD.push({ x, y: h, z, ph: R() * 6.28, i: bl.length, on: true }); bl.push({ x, y: h, z, sy: 1.25, c }); sl.push({ x, y: 0, z, sy: h, sx: 1, sz: 1, c: 0xcfcfcf });
+      }
+    }
+    PR.bal = propsInst(new THREE.SphereGeometry(.2, 10, 8), LitMat({ color: 0xffffff, emissive: 0x222222 }), bl);
+    PR.str = propsInst(new THREE.CylinderGeometry(.006, .006, 1, 3).translate(0, .5, 0), LitMat({ color: 0xffffff }), sl);
+    grp.add(PR.bal, PR.str);
+  }
+  scene.add(grp);
+}
+function propsUpdate(dt, t) {
+  PR.tk -= dt; const moving = P.speed > 1;
+  if (PR.tk <= 0 && moving) for (const h of PR.hit) {
+    if (Math.hypot(P.x - h.x, P.z - h.z) > h.r) continue;
+    PR.tk = .32;
+    if (h.f) { Aud.burst(3200, .12, .04, .4); if (typeof addPetal === 'function') { const A = SKINS[me.skin].accent; addPetal(P.x, P.z, typeof A === 'number' ? h.c : '#' + h.c.toString(16).padStart(6, '0')); } }
+    else Aud.burst(2400, .07, .1, .9);
+    break;
+  }
+  if (PR.bal) {
+    const d = new THREE.Object3D(), m = new THREE.Matrix4(), z = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (const b of PR.balD) {
+      if (!b.on) continue;
+      if (Math.hypot(P.x - b.x, P.z - b.z) < .65) { b.on = false; PR.bal.setMatrixAt(b.i, z); PR.str.setMatrixAt(b.i, z); Aud.burst(2600, .09, .35, .5); Aud.burst(500, .15, .2, .8); Scare.shake = Math.max(Scare.shake, .12); continue; }
+      d.position.set(b.x, b.y + Math.sin(t * 1.3 + b.ph) * .06, b.z); d.scale.set(1, 1.25, 1); d.updateMatrix(); PR.bal.setMatrixAt(b.i, d.matrix);
+    }
+    PR.bal.instanceMatrix.needsUpdate = PR.str.instanceMatrix.needsUpdate = true;
   }
 }
   </script>
