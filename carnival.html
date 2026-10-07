@@ -9,14 +9,14 @@
 <body>
   <!-- ALL ABOUT LEVEL 3, THE ABANDONED CARNIVAL: the generator, the builder, its textures and the level switch (carEnter).
        index.html loads this file at start-up and runs the script below as part of the game. You get here through the library's way out.
-       It is 2/3 the size of the library (61 x 45 tiles vs 91 x 67): a funhouse-style maze of painted boards, a midway with stalls,
+       It is the same size as the library, twice the garden (59 x 43 tiles vs 41 x 31): a funhouse-style maze of painted boards, a midway with stalls,
        and sealed striped tents. Every tent is a real closed room with exactly ONE door (the working door from library.html) and pickups inside (items.html).
        Everyone in a room gets the same carnival (seeded from the room code). -->
   <script>
 'use strict';
 // ---------- tuning ----------
 const CAR = {
-  W: 61, H: 45,            // 2/3 of the library (91 x 67). Keep both odd.
+  W: 59, H: 43,            // 2x the garden (41 x 31), same as the library. Keep both odd.
   tents: 11,               // sealed tents / backstage rooms, each with one door and items inside
   loops: .12,              // chance a wall between two lanes is knocked through (higher = fewer dead ends)
   maxDist: 38,             // nothing further than this is drawn (fog anyway)

@@ -15,12 +15,12 @@
 'use strict';
 // ---------- tuning ----------
 const LIB = {
-  W: 91, H: 67,            // map size in tiles (the garden is 41 x 31, so this is ~4.8x the area)
-  rooms: 24,               // reading rooms scattered between the aisles
+  W: 59, H: 43,            // map size in tiles, keep both odd: 59 x 43 is 2x the garden (41 x 31), same as the carnival
+  rooms: 14,               // reading rooms scattered between the aisles
   loops: .10,              // chance a wall between two aisles is knocked through (higher = fewer dead ends)
   maxDist: 40,             // nothing further than this is drawn: it is all fog anyway, and it keeps the frame rate up
   fog: .052, fogNight: .034, fogColor: 0x0b0806, hemi: .26,
-  mm: 3                    // minimap pixels per tile
+  mm: 4                    // minimap pixels per tile
 };
 let LV = 0, lvBusy = false;    // current level: 0 = garden, 1 = library
 const LG = {};                 // library geometries (A.lib holds the materials)
@@ -81,7 +81,7 @@ function libGen(R) {
     const x0 = 13 + 2 * Math.floor(R() * nx), y0 = 1 + 2 * Math.floor(R() * ny);
     if (fits(x0, y0, w, h)) { place(x0, y0, w, h, 5); atria++; }
   }
-  const sizes = [5, 7, 7, 9];
+  const sizes = [5, 5, 5, 7];        // smaller rooms so ~10 of them fit on the 2x-garden map
   for (let n = 0; n < LIB.rooms; n++) {
     const w = sizes[(R() * sizes.length) | 0], h = sizes[(R() * sizes.length) | 0];
     for (let k = 0; k < 60; k++) {
@@ -340,6 +340,7 @@ function updateDoors(dt) {
       const dx = x - d.cx, dz = z - d.cz, lat = dx * cs - dz * sn, al = dx * sn + dz * cs;      // across the doorway / along it (+ = room side)
       if (Math.abs(lat) < (d.want ? 2.6 : 1.9) && Math.abs(al) < (d.want ? 3.8 : 2.6)) { near = true; side = al; break; }
     }
+    if (d.locked) near = false;                                                                 // a locked door stays shut (escape.html)
     if (near && !d.want && d.ang < .02) d.dir = side > 0 ? -1 : 1;                                // swing away from whoever opened it
     if (near !== d.want) {
       d.want = near;

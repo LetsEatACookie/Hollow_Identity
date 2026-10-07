@@ -1504,10 +1504,10 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script>
-    // Loads characters.html + maps.html + entity.html before the game starts. Needs http(s): GitHub Pages, Netlify, VS Code Live Server... (not a double-clicked file://)
+    // Loads characters.html + maps.html + entity.html + roamers.html (and the rest) before the game starts. Needs http(s): GitHub Pages, Netlify, VS Code Live Server... (not a double-clicked file://)
     (function () {
       try {
-        ['characters.html', 'maps.html', 'entity.html', 'library.html', 'items.html', 'carnival.html', 'extras.html'].forEach(function (f) {
+        ['characters.html', 'maps.html', 'entity.html', 'library.html', 'items.html', 'carnival.html', 'extras.html', 'escape.html', 'roamers.html'].forEach(function (f) {
           var x = new XMLHttpRequest(); x.open('GET', f, false); x.send();
           if (x.status >= 400 || !x.responseText) throw new Error(f + ' not found');
           var el = new DOMParser().parseFromString(x.responseText, 'text/html').querySelector('script');
@@ -2236,7 +2236,7 @@
         if (paused) return;
         if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
         if (keys.has(e.code)) return; keys.add(e.code);
-        if (e.code === 'KeyF') actFlash(); else if (e.code === 'KeyQ') actNight(); else if (e.code === 'KeyE') { if (!itemInteract()) actBeacon(); } else if (e.code === 'KeyG') actFlare();
+        if (e.code === 'KeyF') actFlash(); else if (e.code === 'KeyQ') actNight(); else if (e.code === 'KeyE') { if (!escInteract() && !itemInteract()) actBeacon(); } else if (e.code === 'KeyG') actFlare();
       });
       window.addEventListener('keyup', (e) => keys.delete(e.code));
       window.addEventListener('blur', () => keys.clear());
@@ -2793,7 +2793,7 @@
         const t = ms / 1000, raw = t - lastT || .016, dt = Math.min(.05, raw); lastT = t; tNow = t; uTime.value = t; perfTick(raw);
         if (!world || !previewAv && !started) return;
         if (started) update(dt, t); else previewCam(t);
-        updatePool(dt, t); updateFlares(dt); updateRemotes(dt, t); updateMimic(dt, t); vcFrame(); updatePings(dt); if (petals) updatePetals(dt);
+        updatePool(dt, t); updateFlares(dt); updateRemotes(dt, t); updateMimic(dt, t); updateRoamers(dt, t); updateEscape(dt, t); vcFrame(); updatePings(dt); if (petals) updatePetals(dt);
         cullChunks(); renderer.render(scene, camera);
       }
       resize(); requestAnimationFrame(loop);
