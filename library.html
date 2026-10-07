@@ -15,13 +15,14 @@
 'use strict';
 // ---------- tuning ----------
 const LIB = {
-  W: 59, H: 43,            // map size in tiles, keep both odd: 59 x 43 is 2x the garden (41 x 31), same as the carnival
+  W: 71, H: 51,            // map size in tiles, keep both odd (the garden is 41 x 31 and the carnival 61 x 45, so this is ~2.9x the garden)
   rooms: 14,               // reading rooms scattered between the aisles
   loops: .10,              // chance a wall between two aisles is knocked through (higher = fewer dead ends)
   maxDist: 40,             // nothing further than this is drawn: it is all fog anyway, and it keeps the frame rate up
   fog: .052, fogNight: .034, fogColor: 0x0b0806, hemi: .26,
   mm: 4                    // minimap pixels per tile
 };
+
 let LV = 0, lvBusy = false;    // current level: 0 = garden, 1 = library
 const LG = {};                 // library geometries (A.lib holds the materials)
 
