@@ -91,11 +91,11 @@ function makeAvatar(sk, seed) {
   const eyeCol = rp([0x3a2a1a, 0x2a4a6a, 0x3a6a3a, 0x5a4a2a, 0x222222]), lids = [], mHD = LitMat({ color: hairC, roughness: .9, side: THREE.DoubleSide });
   for (const s of [-1, 1]) {
     const ex = s * .06, MB = (c) => new THREE.MeshBasicMaterial({ color: c, side: THREE.DoubleSide });
-    add(new THREE.SphereGeometry(.034, 12, 10), std(0xf4f4ee, .35), ex, .02, -.125).scale.set(1.15, .9, .8);     // eyeball sticks out of the head
-    add(new THREE.CircleGeometry(.017, 14), std(eyeCol, .3), ex, .02, -.1535, 0, Math.PI, 0);                      // iris
-    add(new THREE.CircleGeometry(.0085, 10), MB(0x080808), ex, .02, -.1545, 0, Math.PI, 0);                         // pupil
-    add(new THREE.CircleGeometry(.004, 8), MB(0xffffff), ex + s * .006, .027, -.1555, 0, Math.PI, 0);               // little shine
-    lids.push(add(new THREE.BoxGeometry(.08, .085, .012), mS, ex, .095, -.147));
+    add(new THREE.SphereGeometry(.034, 12, 10), std(0xf4f4ee, .35), ex, .02, -.13).scale.set(1.15, .9, .9);        // eyeball, mostly outside the face
+    add(new THREE.CircleGeometry(.017, 14), std(eyeCol, .3), ex, .02, -.1635, 0, Math.PI, 0);                      // iris
+    add(new THREE.CircleGeometry(.0085, 10), MB(0x080808), ex, .02, -.1645, 0, Math.PI, 0);                         // pupil
+    add(new THREE.CircleGeometry(.004, 8), MB(0xffffff), ex + s * .006, .027, -.1655, 0, Math.PI, 0);               // shine
+    const lid = add(new THREE.SphereGeometry(.036, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2).rotateX(-Math.PI / 2), mS, ex, .02, -.13); lid.scale.set(1.2, .95, .95); lid.visible = false; lids.push(lid);   // eyelid: a skin dome that shows during a blink
     add(new THREE.BoxGeometry(.07, .013, .014), mH, ex, .078, -.138, 0, 0, s * .14);
     add(new THREE.SphereGeometry(.03, 8, 6), mS, s * .158, -.005, .01).scale.set(.45, 1, .8);
   }
@@ -158,9 +158,12 @@ function poseAvatar(av, speed, t, pitch, flash, talk) {
   const bl = u.bl;                                  // blink every 2-6s (sometimes a quick double blink)
   if (t >= bl.n) { bl.t0 = t; bl.n = t + (Math.random() < .15 ? .3 : 2 + Math.random() * 4.5); }
   const k = t - bl.t0, b = k < .16 ? 1 - Math.abs(k / .08 - 1) : 0;
-  for (const l of u.lids) l.position.y = .02 + .075 * (1 - b);
+  for (const l of u.lids) l.visible = b > .35;
   const tg = talk ? .25 + .75 * Math.abs(Math.sin(t * 13) * Math.sin(t * 5.3 + 1)) : 0;   // mouth flaps while their voice is active
   u.mo += (tg - u.mo) * .4; u.mouth.scale.set(1 - u.mo * .25, 1 + u.mo * 6, 1);
+}
+function disposeAvatar(av) {                        // free the GPU memory of an avatar (geometry, materials, name-tag texture) once it is gone
+  av.traverse(o => { if (o.geometry && o.geometry !== beamGeo) o.geometry.dispose(); const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : []; for (const m of ms) { if (m.map) m.map.dispose(); m.dispose(); } });
 }
 function nameSprite(txt, color) {
   const c = document.createElement('canvas'); c.width = 256; c.height = 64; const x = c.getContext('2d');
@@ -179,7 +182,7 @@ function rollIdentity(takenSkins, takenNames) {
   return { skin, name, role: pick(ROLES), pk, q };
 }
 let previewAv = null;
-function setPreview(i) { if (previewAv) scene.remove(previewAv); previewAv = makeAvatar(SKINS[i], (() => { try { return me.name; } catch (e) { return Math.random(); } })()); previewAv.position.set(9.5, 0, 48); scene.add(previewAv); }
+function setPreview(i) { if (previewAv) { scene.remove(previewAv); disposeAvatar(previewAv); } previewAv = makeAvatar(SKINS[i], (() => { try { return me.name; } catch (e) { return Math.random(); } })()); previewAv.position.set(9.5, 0, 48); scene.add(previewAv); }
   </script>
 </body>
 

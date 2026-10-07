@@ -35,6 +35,7 @@ function xUi() {
     f: mk('position:fixed;inset:0;background:#dfe8ff;opacity:0;pointer-events:none;z-index:12')
   };
 }
+function xDrop(o) { scene.remove(o); o.traverse(m => { if (m.geometry) m.geometry.dispose(); if (m.material) m.material.dispose(); }); }   // remove + free GPU memory
 function xOn() { return typeof CFG === 'undefined' || CFG.scares !== false; }
 function xFree(minD, maxD) {                      // a random open tile between minD and maxD tiles from the player
   const px = Math.floor(P.x / T), pz = Math.floor(P.z / T);
@@ -54,7 +55,7 @@ function xWhisper(txt) {
   Aud.soft(210, 150, 1.4, .03); Aud.burst(900, .9, .02, .6); setTimeout(() => { e.style.opacity = 0; }, 3200);
 }
 function xBuild() {                                // new level -> reset timers, scatter the fragments
-  XS.wld = world; propsBuild(); XS.got = 0; XS.black = 0; XS.flash = 0; XS.frags.forEach(f => scene.remove(f.m)); XS.frags = [];
+  XS.wld = world; propsBuild(); XS.got = 0; XS.black = 0; XS.flash = 0; XS.frags.forEach(f => xDrop(f.m)); XS.frags = [];
   XS.tw = xr(X.whisperEvery) * .5; XS.tb = xr(X.blackEvery); XS.tt = xr(X.thunderEvery); XS.tk = xr(X.watchEvery); XS.watch = 0;
   if (XS.watcher) XS.watcher.visible = false;
   for (let i = 0; i < X.fragments; i++) {
@@ -73,7 +74,7 @@ function updateExtras(dt, t) {
   for (let i = XS.frags.length - 1; i >= 0; i--) {
     const f = XS.frags[i]; f.m.rotation.y += dt * 1.6; f.m.position.y = 1.1 + Math.sin(t * 2 + f.ph) * .12;
     if (Math.hypot(P.x - f.x, P.z - f.z) < 1.5) {
-      scene.remove(f.m); XS.frags.splice(i, 1); XS.got++;
+      xDrop(f.m); XS.frags.splice(i, 1); XS.got++;
       Aud.tone(520, 1040, .5, .1); Aud.soft(260, 390, 1.2, .05);
       toast('Memory ' + XS.got + '/' + X.fragments + ' \u2014 ' + X.lore[(Math.random() * X.lore.length) | 0]);
       if (XS.got >= X.fragments) { P.hp = 100; P.stam = 100; Torch.dead = false; Torch.fault = false; toast('You remember enough. Health restored.'); }
@@ -117,7 +118,7 @@ function updateExtras(dt, t) {
 const PR = { grp: null, bal: null, str: null, balD: [], hit: [], tk: 0 };
 const PAL = { flo: [0xff7aa8, 0xffffff, 0xffd84a, 0xb48cff, 0xff5a5a, 0x7ad0ff], book: [0x6b1f1f, 0x2d4a6b, 0x2f5a3a, 0x5a4328, 0x4a2d5a, 0x8a7a4a], bal: [0xd8333c, 0xf0c030, 0x2f7fd0, 0xe05aa0, 0x40b060] };
 function propsClear() {
-  if (PR.grp) { scene.remove(PR.grp); PR.grp.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
+  if (PR.grp) { scene.remove(PR.grp); PR.grp.traverse(o => { if (o.isInstancedMesh) o.dispose(); if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); }
   PR.grp = PR.bal = PR.str = null; PR.balD = []; PR.hit = [];
 }
 function propsInst(geo, mat, list) {

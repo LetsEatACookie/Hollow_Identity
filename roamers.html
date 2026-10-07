@@ -62,7 +62,7 @@ function rBFS(sx, sy, maxD) {
 }
 function rPathFrom(bfs, sx, sy, ex, ey) {          // tile-centre waypoints, or null if there is no way
   const goal = ey * GW + ex; if (bfs.dist[goal] < 0) return null;
-  const out = []; for (let c = goal; c !== sy * GW + sx; c = bfs.prev[c]) out.push({ x: ((c % GW) + .5) * T, z: (((c / GW) | 0) + .5) * T });
+  const out = []; for (let c = goal, n = 0; c !== sy * GW + sx && n++ < GW * GH; c = bfs.prev[c]) out.push({ x: ((c % GW) + .5) * T, z: (((c / GW) | 0) + .5) * T });
   return out.reverse();
 }
 function rPath(fx, fz, tx, tz) {

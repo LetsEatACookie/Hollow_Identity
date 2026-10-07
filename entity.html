@@ -156,7 +156,7 @@ function mimicPath(fx, fz, tx, tz) {  // tile-centre waypoints from (fx,fz) to (
   const sx = Math.floor(fx / T), sy = Math.floor(fz / T), ex = Math.floor(tx / T), ey = Math.floor(tz / T);
   if (sx === ex && sy === ey) return [];
   const { dist, prev } = mimicBFS(sx, sy, 0), goal = ey * GW + ex; if (dist[goal] < 0) return null;
-  const out = []; for (let c = goal; c !== sy * GW + sx; c = prev[c]) out.push({ x: ((c % GW) + .5) * T, z: (((c / GW) | 0) + .5) * T });
+  const out = []; for (let c = goal, n = 0; c !== sy * GW + sx && n++ < GW * GH; c = prev[c]) out.push({ x: ((c % GW) + .5) * T, z: (((c / GW) | 0) + .5) * T });
   return out.reverse();
 }
 function mimicSpot() {                // somewhere a few turns away that is hidden behind walls
@@ -186,7 +186,7 @@ function mimicStart() {
   return true;
 }
 function mimicEnd() {
-  if (Mim.av) { scene.remove(Mim.av); Mim.av = null; } if (Mim.light) { DYN.delete(Mim.light); Mim.light = null; }
+  if (Mim.av) { scene.remove(Mim.av); disposeAvatar(Mim.av); Mim.av = null; } if (Mim.light) { DYN.delete(Mim.light); Mim.light = null; }
   Mim.st = 'idle'; Mim.t = MIMIC.minGap + Math.random() * (MIMIC.maxGap - MIMIC.minGap);
 }
 function mimicVanish() { if (Mim.st === 'vanish') return; Mim.st = 'vanish'; Mim.fadeT = 0; }

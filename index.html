@@ -2167,7 +2167,7 @@
             seen.add(p.peer); let r = remotes.get(p.peer); if (!r) r = createRemote(p); r.pr = pr;
           }
         }
-        for (const [id, r] of remotes) { if (!seen.has(id)) { scene.remove(r.av); DYN.delete(r.light); remotes.delete(id); if (!alive.has(id)) { mimicForget(id); toast(r.name + ' left'); } else if (((r.pr.lv | 0) > LV)) toast(r.name + ' went through the gate'); } }
+        for (const [id, r] of remotes) { if (!seen.has(id)) { scene.remove(r.av); disposeAvatar(r.av); DYN.delete(r.light); remotes.delete(id); if (!alive.has(id)) { mimicForget(id); toast(r.name + ' left'); } else if (((r.pr.lv | 0) > LV)) toast(r.name + ' went through the gate'); } }
         for (const r of remotes.values()) {
           const pr = r.pr, k = 1 - Math.exp(-12 * dt); let dx = pr.x - r.x, dz = pr.z - r.z;
           if (Math.hypot(dx, dz) > 9) { r.x = pr.x; r.z = pr.z; dx = dz = 0; }
@@ -2788,9 +2788,10 @@
         leaveRoom();
       });
       syncUI();
-      let lastT = 0;
+      let lastT = 0, lastDraw = 0; const FPS_CAP = 60;   // cap at ~60 fps so 120/144 Hz screens don't burn the GPU for nothing
       function loop(ms) {
         requestAnimationFrame(loop);
+        if (ms - lastDraw < 1000 / FPS_CAP - 2) return; lastDraw = ms;
         const t = ms / 1000, raw = t - lastT || .016, dt = Math.min(.05, raw); lastT = t; tNow = t; uTime.value = t; perfTick(raw);
         if (!world || !previewAv && !started) return;
         if (started) update(dt, t); else previewCam(t);
