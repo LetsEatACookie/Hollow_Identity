@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - Escape Protocol</title>
+</head>
+
+<body>
+  <!-- ESCAPE PROTOCOL: turns every level into a horror ESCAPE ROOM. index.html loads this file at start-up and calls updateEscape(dt, t) every frame.
+       1. THE SEAL    - the way out is sealed (the gate glows red, three sockets on it show your progress).
+       2. THE RELICS  - three are hidden on every level (a Moonseed / Torn Page / Golden Ticket). They hum when you are near, and everyone on the team sees the same ones.
+                        Press E to take one. Press H for a hint (cooldown) - it costs you some nerve.
+       3. THE LOCK    - in the library and carnival one of those rooms is LOCKED (red glow on its door) and its Rusty Key lies in another room. Key -> room -> relic -> exit.
+       4. THE FINAL HOUR - break the seal and the level turns on you: siren, blackouts, the roamer is enraged, the Mimic is sent after you, and a light-pillar marks the exit.
+       5. DREAD       - a fear meter (bottom-left). Darkness, roamers, the Mimic and blackouts raise it; staying near a teammate calms it. Crank it up and the screen
+                        closes in, you hear things, and at 100% your nerve breaks (no sprint, torch gutters). Keep your torch on!
+       6. THE REPORT  - when you finally escape you get your time, hits taken, peak dread and a rank (S/A/B/C).
+       All of it follows the "Jumpscares" setting for the scary parts (the objective itself always works). Tune things in the ESC object below. -->
+  <script>
+'use strict';
+// ---------- tuning ----------
+const ESC = {
+  need: 3,                 // relics per level
+  hour: 150,               // seconds of the Final Hour
+  ping: 17,                // relics hum from this far away (world units)
+  hintCd: 45, hintCost: 7, // hint cooldown (s) · dread it costs
+  reach: 3.1,              // pick-up range
+  dread: { dark: 1.8, roamer: 5, mimic: 4, black: 5, hour: .9, calm: 3, team: 5, panic: 100, panicCd: 30 },
+  rooms: [
+    { relic: 'Moonseed', icon: '🌑', col: 0x7dffb0, lore: ['It is warm, and it remembers rain.', 'A seed that grew in the dark.', 'It hums your name backwards.'] },
+    { relic: 'Torn Page', icon: '📜', col: 0xffd27a, lore: ['Your handwriting. You never wrote this.', 'The ink is still wet.', 'The last line is your name, crossed out.'] },
+    { relic: 'Golden Ticket', icon: '🎟️', col: 0xffc83a, lore: ['ADMIT ONE. NO REFUNDS. NO EXIT.', 'It is already punched.', 'Someone is laughing on the other side.'] }
+  ],
+  whispers: ['you are not alone', 'it is counting your breaths', 'turn the light on', 'it can smell the fear', 'do not run', 'it knows where you are', 'behind you']
+};
+const ES = {
+  wld: null, lv: -1, t0: 0, objs: [], locks: [], need: 0, got: 0, keys: 0, sealed: false, planned: false, mine: new Set(), seen: new Map(),
+  hourOn: false, hour: 0, hourDone: false, sirenT: 0, seals: [], sealTex: null, sealCv: null, beacon: null,
+  dread: 0, peak: 0, hits: 0, hurt: 0, hitsRun: 0, halT: 8, ambT: 25, heartT: 0, pingT: 0, hintT: 0, scanT: 0, briefT: 0,
+  el: null, prompt: null, vig: null, pulse: null, banner: null, bannerT: 0, tgt: null, lastObj: '', lastPr: '', panic: 0, fell: 0
+};
+const eOn = () => typeof CFG === 'undefined' || CFG.scares !== false;
+const eRng = (s) => mulberry32(hashStr(String(s)));
+
+// ================= the seal on the way out =================
+const _gateOpen = gateOpen, _setGateLook = setGateLook;
+gateOpen = function () { return _gateOpen() && !ES.sealed; };
+setGateLook = function (G, v) {                     // a sealed gate glows red and dim, with its sockets showing how many relics you have
+  _setGateLook(G, ES.sealed ? v * .15 : v);
+  if (G.seal) G.seal.visible = ES.sealed && v > .02;
+  if (G.glow && G.glow.material) G.glow.material.color.setHex(ES.sealed ? 0xff3344 : 0x66ffc8);
+  if (G.light) G.light.col = ES.sealed ? 0xff3344 : 0x66ffc8;
+  if (ES.sealed && G.light && v > .02) G.light.int = G.light.base * .6 * v;
+};
+function escSealDraw() {
+  const c = ES.sealCv || (ES.sealCv = document.createElement('canvas')); c.width = c.height = 256; const x = c.getContext('2d');
+  x.clearRect(0, 0, 256, 256); x.lineWidth = 6; x.strokeStyle = 'rgba(255,60,70,.95)'; x.shadowColor = '#ff2030'; x.shadowBlur = 16;
+  x.beginPath(); x.arc(128, 128, 96, 0, 7); x.stroke(); x.lineWidth = 3; x.beginPath(); x.arc(128, 128, 76, 0, 7); x.stroke();
+  x.beginPath(); for (let i = 0; i < 3; i++) { const a = i / 3 * 6.283 - 1.57; x.moveTo(128 + Math.cos(a) * 30, 128 + Math.sin(a) * 30); x.lineTo(128 + Math.cos(a + 2.094) * 30, 128 + Math.sin(a + 2.094) * 30); } x.stroke();
+  for (let i = 0; i < ES.need; i++) {
+    const a = (i / ES.need) * 6.283 - 1.57, px = 128 + Math.cos(a) * 96, py = 128 + Math.sin(a) * 96;
+    x.beginPath(); x.arc(px, py, 15, 0, 7); x.fillStyle = i < ES.got ? 'rgba(120,255,170,.95)' : 'rgba(20,0,4,.9)'; x.fill();
+    x.strokeStyle = i < ES.got ? '#aaffd0' : '#ff4455'; x.lineWidth = 4; x.stroke();
+  }
+  if (ES.sealTex) ES.sealTex.needsUpdate = true;
+}
+function escSeals() {
+  for (const s of ES.seals) if (s.parent) s.parent.remove(s);
+  ES.seals = []; const gs = world.gates; if (!gs) return;
+  escSealDraw(); if (!ES.sealTex) ES.sealTex = new THREE.CanvasTexture(ES.sealCv);
+  const mat = new THREE.SpriteMaterial({ map: ES.sealTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: .9 });
+  for (const G of gs) {
+    if (!G.grp) continue;
+    const s = new THREE.Sprite(mat); if (G.glow) { s.position.copy(G.glow.position); s.position.y = Math.max(1.6, s.position.y + .2); } else s.position.set(0, 1.8, 0);
+    s.scale.set(3.4, 3.4, 1); G.grp.add(s); G.seal = s; ES.seals.push(s);
+  }
+}
+
+// ================= planning: where the relics and the key hide (same for everyone: seeded by the room code) =================
+function escPlan(w) {
+  const W = GW, H = GH, g = w.g, I = (x, y) => y * W + x, R = eRng(code + '|esc|' + LV);
+  const sp = w.spawn || { x0: 8 * T, x1: 15 * T, z0: 46.5 * T, z1: 51.5 * T };
+  let sx = Math.floor((sp.x0 + sp.x1) / 2 / T), sy = Math.floor((sp.z0 + sp.z1) / 2 / T);
+  if (g[I(sx, sy)] !== 0) { let f = false; for (let r = 1; r < 8 && !f; r++)for (let y = sy - r; y <= sy + r && !f; y++)for (let x = sx - r; x <= sx + r && !f; x++) if (x > 0 && y > 0 && x < W - 1 && y < H - 1 && g[I(x, y)] === 0) { sx = x; sy = y; f = true; } if (!f) return null; }
+  const dist = new Int16Array(W * H).fill(-1), q = [I(sx, sy)]; dist[q[0]] = 0;
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h], cx = c % W, cy = (c / W) | 0;
+    for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = cx + ax, ny = cy + ay; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue; const ni = I(nx, ny); if (dist[ni] >= 0 || g[ni] !== 0) continue; dist[ni] = dist[c] + 1; q.push(ni); }
+  }
+  const shuf = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = (R() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const tileOf = (x, y) => ({ x: (x + .5) * T + (R() - .5) * .8, z: (y + .5) * T + (R() - .5) * .8, tx: x, ty: y });
+  const rooms = (w.rooms || []).filter(r => r.type === 2 && r.w * r.h >= 9).map(r => {
+    const f = []; for (let y = r.y0; y < r.y0 + r.h; y++)for (let x = r.x0; x < r.x0 + r.w; x++) if (g[I(x, y)] === 0 && dist[I(x, y)] >= 0) f.push([x, y]);
+    return { r, f, d: f.length ? Math.min(...f.map(p => dist[I(p[0], p[1])])) : -1, cx: r.x0 + r.w / 2, cy: r.y0 + r.h / 2 };
+  }).filter(o => o.f.length && o.d >= 0);
+  const picked = [], objs = [], locks = [];
+  const spread = (list, n, gap) => { const out = []; for (const o of list) { if (out.length >= n) break; if (out.every(p => Math.hypot(p.cx - o.cx, p.cy - o.cy) >= gap)) out.push(o); } return out; };
+  const rel = ESC.rooms[Math.min(LV, ESC.rooms.length - 1)];
+  if (rooms.length >= ESC.need + 2) {
+    const far = shuf(rooms.filter(o => o.d >= 12));
+    let pk = spread(far, ESC.need, 16); if (pk.length < ESC.need) pk = spread(far, ESC.need, 8); if (pk.length < ESC.need) pk = shuf(rooms.slice()).slice(0, ESC.need);
+    pk.forEach((o, i) => { const [x, y] = o.f[(R() * o.f.length) | 0]; objs.push(Object.assign({ id: i, kind: 'relic', room: o.r }, tileOf(x, y))); picked.push(o); });
+    const others = rooms.filter(o => !picked.includes(o) && o.d >= 3).sort((a, b) => a.d - b.d).slice(0, 4);
+    if (others.length) {
+      const k = others[(R() * others.length) | 0], [x, y] = k.f[(R() * k.f.length) | 0]; objs.push(Object.assign({ id: 0, kind: 'key', room: k.r }, tileOf(x, y)));
+      const deepest = pk.slice().sort((a, b) => b.d - a.d)[0]; locks.push({ id: 0, room: deepest.r });
+    }
+  } else {                                           // no rooms to hide things in: use the dead ends of the maze instead
+    const ends = []; for (let y = 1; y < H - 1; y++)for (let x = 1; x < W - 1; x++) {
+      if (g[I(x, y)] !== 0 || dist[I(x, y)] < 18) continue;
+      let n = 0; for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (g[I(x + ax, y + ay)] === 0) n++;
+      if (n === 1) ends.push({ f: [[x, y]], cx: x, cy: y, d: dist[I(x, y)] });
+    }
+    let pool = shuf(ends); let pk = spread(pool, ESC.need, 14); if (pk.length < ESC.need) pk = spread(pool, ESC.need, 7);
+    if (pk.length < ESC.need) { const any = []; for (let y = 1; y < H - 1; y++)for (let x = 1; x < W - 1; x++) if (g[I(x, y)] === 0 && dist[I(x, y)] >= 20) any.push({ f: [[x, y]], cx: x, cy: y, d: dist[I(x, y)] }); pk = spread(shuf(any), ESC.need, 8); }
+    pk.forEach((o, i) => objs.push(Object.assign({ id: i, kind: 'relic' }, tileOf(o.f[0][0], o.f[0][1]))));
+  }
+  if (objs.filter(o => o.kind === 'relic').length < 1) return null;
+  return { objs, locks, rel };
+}
+
+// ================= meshes =================
+function escMesh(kind, rel) {
+  const g = new THREE.Group(), bm = (c) => new THREE.MeshBasicMaterial({ color: c });
+  if (kind === 'key') {
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(.05, .34, .03), bm(0xd9b45a))); const bow = new THREE.Mesh(new THREE.TorusGeometry(.085, .024, 6, 14), bm(0xd9b45a)); bow.position.y = .22; g.add(bow);
+    const tooth = new THREE.Mesh(new THREE.BoxGeometry(.1, .045, .03), bm(0xd9b45a)); tooth.position.set(.06, -.12, 0); g.add(tooth);
+  } else if (rel === ESC.rooms[1]) {                // a torn page
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(.3, .4, .012), bm(0xf2e8c4))); const ln = new THREE.Mesh(new THREE.BoxGeometry(.2, .02, .014), bm(0x802020)); ln.position.set(0, .05, 0); g.add(ln);
+    const l2 = ln.clone(); l2.position.y = -.04; l2.scale.x = .7; g.add(l2);
+  } else if (rel === ESC.rooms[2]) {                // a golden ticket
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(.44, .22, .03), bm(0xffc83a))); const st = new THREE.Mesh(new THREE.BoxGeometry(.3, .1, .035), bm(0xb07a10)); g.add(st);
+  } else {                                           // a moonseed: a pale glowing seed in a ring
+    g.add(new THREE.Mesh(new THREE.SphereGeometry(.14, 12, 9), bm(0xcfffe0))); const rg = new THREE.Mesh(new THREE.TorusGeometry(.24, .014, 6, 28), bm(0x7dffb0)); rg.rotation.x = Math.PI / 2; g.add(rg); g.userData.ring = rg;
+  }
+  const col = kind === 'key' ? 0xffd27a : rel.col;
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: A.tex.glow, color: col, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity: .9 }));
+  glow.scale.set(kind === 'key' ? 1.6 : 2.6, kind === 'key' ? 1.6 : 2.6, 1); g.add(glow);
+  return g;
+}
+function escSetup() {                                // build this level's puzzle
+  const w = world; ES.planned = true;
+  const plan = escPlan(w);
+  if (!plan) { ES.need = 0; ES.sealed = false; return; }
+  const rel = plan.rel; ES.need = plan.objs.filter(o => o.kind === 'relic').length; ES.sealed = true;
+  for (const o of plan.objs) {
+    o.grp = escMesh(o.kind, rel); o.rel = rel; o.grp.position.set(o.x, .95, o.z); scene.add(o.grp); o.taken = false; o.ph = o.id * 1.7 + (o.kind === 'key' ? 4 : 0);
+    o.light = { x: o.x, y: 1.1, z: o.z, col: o.kind === 'key' ? 0xffd27a : rel.col, int: .55, d: 6, fl: .4, ph: o.ph, w: 1 }; DYN.add(o.light);
+    ES.objs.push(o);
+  }
+  for (const L of plan.locks) {                      // lock every door that belongs to that room (needs the key; the leaf stays shut)
+    const r = L.room, doors = [];
+    for (const d of (w.dyn || [])) {
+      const tx = Math.floor(d.cx / T), ty = Math.floor(d.cz / T);
+      const inR = tx >= r.x0 - 1 && tx <= r.x0 + r.w && ty >= r.y0 - 1 && ty <= r.y0 + r.h, inside = tx >= r.x0 && tx < r.x0 + r.w && ty >= r.y0 && ty < r.y0 + r.h;
+      if (inR && !inside) doors.push(d);
+    }
+    if (!doors.length) { ES.objs = ES.objs.filter(o => { if (o.kind === 'key') { scene.remove(o.grp); DYN.delete(o.light); return false; } return true; }); continue; }
+    const lk = { id: L.id, doors, locked: true, sprites: [] };
+    for (const d of doors) {
+      d.locked = true;
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: A.tex.glow, color: 0xff2a3a, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity: .9 }));
+      s.scale.set(1.1, 1.1, 1); s.position.set(d.cx, 1.35, d.cz); scene.add(s); lk.sprites.push(s);
+    }
+    ES.locks.push(lk);
+  }
+  escSeals(); escSealDraw();
+  if (typeof net !== 'undefined' && netOn) net.set({ es: LV + ';' });
+}
+function escClear() {
+  for (const o of ES.objs) { if (o.grp) scene.remove(o.grp); if (o.light) DYN.delete(o.light); }
+  for (const l of ES.locks) for (const s of l.sprites) scene.remove(s);
+  if (ES.beacon) { scene.remove(ES.beacon); ES.beacon = null; }
+  for (const s of ES.seals) if (s.parent) s.parent.remove(s);
+  Object.assign(ES, { objs: [], locks: [], seals: [], need: 0, got: 0, keys: 0, sealed: false, planned: false, hourOn: false, hour: 0, hourDone: false, mine: new Set(), seen: new Map(), tgt: null, hintT: 0, briefT: 0, halT: 8, ambT: 25, pingT: 0, panic: 0 });
+  if (typeof roamRage === 'function') roamRage(false);
+}
+function escBlocked(tx, ty) {                        // roamers treat a locked door's tile as a wall
+  for (const l of ES.locks) if (l.locked) for (const d of l.doors) if (Math.floor(d.cx / T) === tx && Math.floor(d.cz / T) === ty) return true;
+  return false;
+}
+
+// ================= taking things / unlocking =================
+function escPublish() { if (typeof net !== 'undefined' && netOn) net.set({ es: LV + ';' + [...ES.mine].join(',') }); }
+function escCount() { ES.got = ES.objs.filter(o => o.kind === 'relic' && o.taken).length; return ES.got; }
+function escTake(o, mine) {
+  if (o.taken) return; o.taken = true; o.grp.visible = false; DYN.delete(o.light);
+  if (mine) { ES.mine.add((o.kind === 'key' ? 'k' : 'r') + o.id); escPublish(); }
+  escCount(); escSealDraw();
+  if (o.kind === 'key') {
+    if (mine) { ES.keys++; Aud.tone(700, 1400, .2, .12, 'triangle'); toast('🔑 Rusty Key — it fits a locked door somewhere. Look for the red glow.'); }
+  } else {
+    Aud.tone(330, 990, .6, .12, 'triangle'); Aud.soft(200, 400, 1.6, .06);
+    if (mine) toast(o.rel.icon + ' ' + o.rel.relic + ' recovered (' + ES.got + '/' + ES.need + ') — ' + o.rel.lore[(Math.random() * o.rel.lore.length) | 0]);
+    else toast('A teammate recovered a ' + o.rel.relic + ' (' + ES.got + '/' + ES.need + ')');
+    if (eOn() && mine) { P.flickT = Math.max(P.flickT, .4); ES.dread = Math.min(100, ES.dread + 6); }
+  }
+  escCheck();
+}
+function escUnlock(lk, mine) {
+  if (!lk.locked) return; lk.locked = false; for (const d of lk.doors) d.locked = false; for (const s of lk.sprites) s.visible = false;
+  if (mine) { ES.mine.add('u' + lk.id); escPublish(); }
+  Aud.burst(1400, .06, .1, 3); Aud.tone(180, 90, .5, .08, 'sawtooth'); setTimeout(() => Aud.burst(150, .2, .18, .8), 300);
+}
+function escCheck() {
+  if (ES.sealed && ES.need > 0 && ES.got >= ES.need) { ES.sealed = false; escHourStart(); }
+}
+function escTarget() {                               // the thing you are looking at that E would act on
+  if (P.down > 0 || P.freeze || paused) return null;
+  const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw); let best = null, bs = -9;
+  for (const o of ES.objs) {
+    if (o.taken) continue; const dx = o.x - P.x, dz = o.z - P.z, d = Math.hypot(dx, dz); if (d > ESC.reach) continue;
+    const dot = d < 1.1 ? 1 : (dx * fx + dz * fz) / d; if (dot < .3) continue; const s = dot * 2 - d * .3; if (s > bs) { best = { type: 'obj', o }; bs = s; }
+  }
+  if (best) return best;
+  for (const lk of ES.locks) if (lk.locked) for (const d of lk.doors) {
+    const dx = d.cx - P.x, dz = d.cz - P.z, dist = Math.hypot(dx, dz); if (dist > 3.4) continue;
+    const dot = dist < 1.2 ? 1 : (dx * fx + dz * fz) / dist; if (dot > .2) return { type: 'lock', lk };
+  }
+  return null;
+}
+function escInteract() {                             // called from the E key (before items). True when it used the keypress.
+  const t = escTarget(); if (!t) return false;
+  if (t.type === 'obj') { escTake(t.o, true); return true; }
+  if (ES.keys > 0) { ES.keys--; escUnlock(t.lk, true); toast('🔑 The key turns. Click. The door is unlocked.'); } else { Aud.burst(300, .1, .15, 2); toast('Locked. Something in this place must open it…'); }
+  return true;
+}
+
+// ================= the Final Hour =================
+function escBanner(title, sub, ms) {
+  if (!ES.banner) {
+    const d = ES.banner = document.createElement('div');
+    d.style.cssText = 'position:fixed;left:50%;top:22%;transform:translateX(-50%);text-align:center;z-index:14;pointer-events:none;opacity:0;transition:opacity .7s;font-family:Georgia,serif;text-shadow:0 0 18px #000,0 0 40px rgba(255,0,30,.5);max-width:90vw';
+    document.body.appendChild(d);
+  }
+  ES.banner.innerHTML = '<div style="font-size:clamp(22px,4.4vw,40px);letter-spacing:.18em;color:#ff5a66;font-weight:700">' + title + '</div><div style="font-size:clamp(13px,2vw,17px);color:#e9dcdc;margin-top:8px;letter-spacing:.08em;font-style:italic">' + sub + '</div>';
+  ES.banner.style.opacity = 1; ES.bannerT = ms || 6;
+}
+function escHourStart() {
+  ES.hourOn = true; ES.hour = ESC.hour; ES.hourDone = false; ES.sirenT = 0;
+  escBanner('THE SEAL BREAKS', 'The way out is open. Everything in here just woke up.', 7);
+  Aud.stinger(.8); Aud.rumble && Aud.rumble(); escSealDraw();
+  if (eOn()) {
+    if (typeof roamRage === 'function') roamRage(true);
+    if (typeof Mim !== 'undefined' && Mim.st === 'idle') Mim.t = Math.min(Mim.t, 4);
+    if (typeof XS !== 'undefined') XS.tb = Math.min(XS.tb, 6);
+    ES.dread = Math.min(100, ES.dread + 20);
+  }
+  const col = 0x66ffc8, b = new THREE.Mesh(new THREE.CylinderGeometry(.6, 1.1, 90, 16, 1, true), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: .26, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
+  b.frustumCulled = false; scene.add(b); ES.beacon = b;
+}
+function escHourTick(dt, t) {
+  if (!ES.hourOn || P.escaped) return;
+  const ex = world.exit; if (ES.beacon && ex) { ES.beacon.position.set(ex.x, 45, ex.z); ES.beacon.material.opacity = .2 + Math.sin(t * 2.2) * .06; }
+  if (!ES.hourDone) ES.hour -= dt;
+  ES.sirenT -= dt; if (ES.sirenT <= 0) { ES.sirenT = 2.6; Aud.tone(620, 400, 1.1, .05, 'sawtooth'); setTimeout(() => Aud.tone(400, 620, 1.1, .04, 'sawtooth'), 1250); }
+  if (!ES.hourDone && ES.hour <= 0) {
+    ES.hourDone = true; ES.hour = 0; escBanner('THE HOUR IS OVER', 'It is no longer hunting. It is here.', 6);
+    Aud.stinger(1); Scare.shake = Math.max(Scare.shake, .8); ES.dread = Math.min(100, ES.dread + 30);
+    if (eOn() && typeof roamWarp === 'function') roamWarp();
+  }
+}
+
+// ================= dread =================
+function escDreadTick(dt, t) {
+  const D = ESC.dread; let up = 0, calm = true;
+  const dark = !P.flash || (typeof Torch !== 'undefined' && Torch.k < .3);
+  if (eOn()) {
+    if (dark) { up += D.dark; calm = false; }
+    if (typeof RS !== 'undefined' && RS.m && RS.m.av && RS.m.av.visible) { const dx = RS.m.x - P.x, dz = RS.m.z - P.z, d = Math.hypot(dx, dz); if (d < 15 && mimicLOS(RS.m.x, RS.m.z, P.x, P.z)) { up += D.roamer * (1 - d / 15); calm = false; } }
+    if (typeof Mim !== 'undefined' && Mim.st && Mim.st !== 'idle') { const d = Math.hypot(Mim.x - P.x, Mim.z - P.z); if (d < 13) { up += D.mimic * (1 - d / 13); calm = false; } }
+    if (typeof XS !== 'undefined' && XS.black > 0) { up += D.black; calm = false; }
+    if (ES.hourOn) up += D.hour;
+  }
+  let down = calm ? D.calm : D.calm * .3;
+  if (typeof remotes !== 'undefined') for (const r of remotes.values()) if (Math.hypot(r.x - P.x, r.z - P.z) < 10) { down += D.team; break; }
+  ES.dread = Math.max(0, Math.min(100, ES.dread + (up - (up > 0 ? 0 : down) - (up > 0 ? down * .35 : 0)) * dt));
+  ES.peak = Math.max(ES.peak, ES.dread); ES.panic = Math.max(0, ES.panic - dt);
+  const dr = ES.dread, k = Math.max(0, (dr - 25) / 70);
+  if (ES.vig) ES.vig.style.opacity = Math.min(.92, k + (ES.hourOn && !ES.hourDone ? .12 : 0));
+  if (ES.pulse) ES.pulse.style.opacity = ES.hourOn ? (.1 + .1 * Math.sin(t * 3.2) + (ES.hourDone ? .12 : 0)).toFixed(3) : 0;
+  // heartbeat
+  if (dr > 42 && P.down <= 0) { ES.heartT -= dt; if (ES.heartT <= 0) { ES.heartT = 1.15 - (dr - 42) / 58 * .7; const v = .12 + (dr - 42) / 58 * .25; Aud.tone(60, 38, .14, v); setTimeout(() => Aud.tone(54, 36, .16, v * .75), 160); } }
+  // things that aren't there
+  if (dr > 55 && eOn()) {
+    ES.halT -= dt; if (ES.halT <= 0) {
+      ES.halT = 6 + Math.random() * 9 - (dr - 55) / 45 * 4; const r = Math.random();
+      if (r < .4) { for (let i = 0; i < 4; i++) setTimeout(() => Aud.step(.25, 'wood'), i * 380); }
+      else if (r < .75 && typeof xWhisper === 'function') xWhisper(ESC.whispers[(Math.random() * ESC.whispers.length) | 0]);
+      else { Aud.tone(90, 55, .9, .07, 'sawtooth'); Scare.shake = Math.max(Scare.shake, .25); }
+    }
+  }
+  if (dr > 85 && Math.random() < dt * .8) P.flickT = Math.max(P.flickT, .14);
+  if (dr >= ESC.dread.panic && ES.panic <= 0 && eOn() && P.down <= 0) {          // your nerve breaks
+    ES.panic = ESC.dread.panicCd; ES.dread = 55; ES.fell++; P.stam = 0; P.exh = true; P.flickT = 3; Scare.shake = 1; Aud.stinger(.7);
+    toast('Your nerve breaks. Breathe. Keep the torch on.'); if (typeof xWhisper === 'function') xWhisper('breathe');
+  }
+}
+
+// ================= ambience: the level itself is trying to scare you =================
+function escAmbient(dt) {
+  if (!eOn()) return;
+  ES.ambT -= dt * (1 + ES.dread / 80 + (ES.hourOn ? .6 : 0)); if (ES.ambT > 0) return; ES.ambT = 20 + Math.random() * 24;
+  const v = .5 + Math.random() * .5;
+  if (LV === 0) { Aud.tone(75, 42, 1.6, .05 * v, 'sawtooth'); Aud.burst(500, .6, .04 * v, .6); setTimeout(() => Aud.burst(1500, .3, .05 * v, .5), 700); }                        // something large in the grass
+  else if (LV === 1) { for (let i = 0; i < 5; i++) setTimeout(() => Aud.burst(3000, .09, .04 * v, .7), i * 130); Aud.soft(190, 130, 2.2, .03 * v); }                            // pages riffling, a long breath
+  else { [784, 659, 740, 587, 659, 523].forEach((f, i) => setTimeout(() => Aud.tone(f * (1 + Math.random() * .02), f * .99, .5, .035 * v, 'triangle'), i * 340)); setTimeout(() => { for (let i = 0; i < 4; i++) setTimeout(() => Aud.tone(620 + i * 60, 520 + i * 30, .07, .04 * v, 'triangle'), i * 90); }, 2300); }   // a music box that winds down, then a giggle
+}
+
+// ================= hint =================
+function escHint() {
+  if (!started || paused || P.escaped || P.freeze || !ES.planned) return;
+  if (ES.hintT > 0) { toast('Your nerve needs ' + Math.ceil(ES.hintT) + 's before you can feel for another hint.'); return; }
+  let best = null, bd = 1e9;
+  const want = ES.objs.filter(o => !o.taken && o.kind === 'relic'); const key = ES.objs.find(o => o.kind === 'key' && !o.taken);
+  const keyNeeded = key && ES.keys === 0 && ES.locks.some(l => l.locked);
+  for (const o of (keyNeeded && want.length <= 1 ? [key].concat(want) : want)) { const d = Math.hypot(o.x - P.x, o.z - P.z); if (d < bd) { bd = d; best = o; } }
+  if (!best) { if (ES.sealed) toast('Nothing left to find. The exit should answer.'); else toast('Run for the light-pillar. The way out is open.'); return; }
+  const dx = best.x - P.x, dz = best.z - P.z, rel = Math.atan2(dx * Math.cos(P.yaw) - dz * Math.sin(P.yaw), -(dx * Math.sin(P.yaw) + dz * Math.cos(P.yaw)));
+  const dir = Math.abs(rel) < .6 ? 'ahead' : Math.abs(rel) > 2.5 ? 'behind you' : rel > 0 ? 'to your right' : 'to your left';
+  ES.hintT = ESC.hintCd; ES.dread = Math.min(99, ES.dread + ESC.hintCost);
+  const nm = best.kind === 'key' ? 'the Rusty Key' : 'a ' + best.rel.relic;
+  toast('Something hums… ' + nm + ' is about ' + Math.round(bd / T * 10) / 10 + ' rooms away, ' + dir + '.');
+  Aud.soft(160, 240, 1.2, .06);
+}
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyH' || e.repeat || typeof started === 'undefined' || !started || paused) return; const tg = e.target && e.target.tagName; if (tg === 'INPUT' || tg === 'TEXTAREA') return; escHint();
+});
+
+// ================= HUD =================
+function escUi() {
+  if (ES.el) return; const bl = $('#bl'); if (!bl) return;
+  const mk = (css, par) => { const d = document.createElement('div'); d.style.cssText = css; (par || document.body).appendChild(d); return d; };
+  ES.el = document.createElement('div'); ES.el.style.cssText = 'margin-bottom:12px;padding:7px 9px;border-radius:8px;background:rgba(0,0,0,.38);border:1px solid rgba(255,255,255,.1);cursor:pointer;pointer-events:auto';
+  ES.el.title = 'Tap or press H for a hint'; ES.el.addEventListener('click', escHint);
+  ES.el.innerHTML = '<div class="lbl first"><span id="escRel">RELICS</span><span id="escRelN"></span></div><div class="lbl" style="margin-top:4px"><span id="escSt"></span><span id="escSt2"></span></div>';
+  bl.insertBefore(ES.el, bl.firstChild);
+  const l = document.createElement('div'); l.className = 'lbl'; l.innerHTML = '<span>Dread</span><span id="escDrN">0%</span>'; bl.appendChild(l);
+  const b = document.createElement('div'); b.className = 'bar2'; b.innerHTML = '<div id="escDrF" style="background:linear-gradient(90deg,#8a6cff,#ff4a6a);width:0"></div>'; bl.appendChild(b);
+  ES.vig = mk('position:fixed;inset:0;pointer-events:none;z-index:8;opacity:0;transition:opacity .4s;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 38%,rgba(22,0,8,.92) 100%)');
+  ES.pulse = mk('position:fixed;inset:0;pointer-events:none;z-index:8;opacity:0;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 30%,rgba(190,0,20,.75) 100%)');
+  ES.prompt = mk('position:fixed;left:50%;bottom:27%;transform:translateX(-50%);z-index:20;pointer-events:none;opacity:0;transition:opacity .15s;padding:7px 16px;border-radius:8px;background:rgba(0,0,0,.55);color:#ffe9e0;font:600 14px Inter,sans-serif;letter-spacing:.06em;text-align:center');
+  ES.prompt.addEventListener('touchstart', (ev) => { ev.preventDefault(); escInteract(); }, { passive: false });
+}
+function escHud() {
+  if (!ES.el) return;
+  const rel = ESC.rooms[Math.min(LV, ESC.rooms.length - 1)], pips = ES.need ? Array.from({ length: ES.need }, (_, i) => i < ES.got ? '◆' : '◇').join(' ') : '';
+  const a = rel.icon + ' ' + rel.relic.toUpperCase() + 'S', b = ES.need ? pips : '—';
+  const st = ES.hourOn ? (P.escaped ? 'OUT' : ES.hourDone ? 'IT IS HERE' : 'ESCAPE ' + String(Math.floor(ES.hour / 60)).padStart(2, '0') + ':' + String(Math.floor(ES.hour % 60)).padStart(2, '0')) : ES.sealed ? 'EXIT SEALED' : 'EXIT OPEN';
+  const st2 = ES.keys ? '🔑 ×' + ES.keys : '';
+  const key = a + '|' + b + '|' + st + '|' + st2; if (key !== ES.lastObj) {
+    ES.lastObj = key; $('#escRel').textContent = a; $('#escRelN').textContent = b; const s = $('#escSt'); s.textContent = st; s.style.color = ES.hourOn ? '#ff6a76' : ES.sealed ? '#ff9a8a' : '#8dffc4'; $('#escSt2').textContent = st2;
+  }
+  $('#escDrF').style.width = ES.dread + '%'; $('#escDrN').textContent = Math.round(ES.dread) + '%';
+}
+
+// ================= main update =================
+function updateEscape(dt, t) {
+  escHook();
+  if (!started || !world) { if (ES.wld) { escClear(); ES.wld = null; } return; }
+  if (P.escaped) { if (ES.beacon) ES.beacon.visible = false; return; }
+  escUi();
+  if (ES.wld !== world) { escClear(); ES.wld = world; ES.lv = LV; if (!ES.t0) ES.t0 = performance.now(); escSetup(); ES.briefT = 5; }
+  if (P.freeze || paused) return;
+  if (ES.bannerT > 0) { ES.bannerT -= dt; if (ES.bannerT <= 0 && ES.banner) ES.banner.style.opacity = 0; }
+  if (ES.briefT > 0) {
+    ES.briefT -= dt;
+    if (ES.briefT <= 0 && ES.need) { const rel = ESC.rooms[Math.min(LV, ESC.rooms.length - 1)]; escBanner('THE EXIT IS SEALED', 'Recover ' + ES.need + ' ' + rel.relic + 's hidden in this place (' + rel.icon + '). They hum when you are close. Press H for a hint.', 8); }
+  }
+  ES.hintT = Math.max(0, ES.hintT - dt);
+  // relics and the key: spin, bob, hum
+  let nearest = 1e9, nearO = null;
+  for (const o of ES.objs) {
+    if (o.taken) continue; const dx = o.x - P.x, dz = o.z - P.z, d = Math.hypot(dx, dz), near = d < 44; o.grp.visible = near;
+    if (near) { o.grp.rotation.y = t * 1.4 + o.ph; o.grp.position.y = .95 + Math.sin(t * 2 + o.ph) * .08; if (o.grp.userData.ring) o.grp.userData.ring.rotation.z = t * 2; }
+    if (d < nearest) { nearest = d; nearO = o; }
+  }
+  if (nearO && nearest < ESC.ping) {
+    ES.pingT -= dt; if (ES.pingT <= 0) { const k = nearest / ESC.ping; ES.pingT = .3 + k * 1.7; const f = nearO.kind === 'key' ? 1568 : 1046; Aud.tone(f, f * .98, .16, .015 + .05 * (1 - k), 'sine'); }
+  }
+  // prompts
+  const tg = escTarget(); let txt = '';
+  if (tg && tg.type === 'obj') txt = '[E]  Take ' + (tg.o.kind === 'key' ? '🔑 Rusty Key' : tg.o.rel.icon + ' ' + tg.o.rel.relic);
+  else if (tg && tg.type === 'lock') txt = ES.keys > 0 ? '[E]  Unlock with 🔑 Rusty Key' : 'Locked 🔒  — find the key';
+  else if (ES.sealed && world.exit && Math.hypot(P.x - world.exit.x, P.z - world.exit.z) < 7) txt = 'The exit is sealed — ' + ES.got + '/' + ES.need + ' ' + ESC.rooms[Math.min(LV, 2)].relic + 's';
+  if (txt !== ES.lastPr) { ES.prompt.textContent = txt; ES.lastPr = txt; if (isTouch) ES.prompt.style.pointerEvents = txt && tg ? 'auto' : 'none'; }
+  ES.prompt.style.opacity = txt ? 1 : 0;
+  // teammates' pick-ups and unlocks
+  ES.scanT -= dt;
+  if (ES.scanT <= 0 && typeof net !== 'undefined' && net.r) {
+    ES.scanT = .3;
+    for (const p of net.r.peers()) {
+      if (p.isMe) continue; const s = p.presence && p.presence.es; if (typeof s !== 'string' || ES.seen.get(p.peer) === s) continue;
+      ES.seen.set(p.peer, s); const parts = s.split(';'); if ((+parts[0] | 0) !== LV || !parts[1]) continue;
+      for (const tk of parts[1].split(',')) {
+        const id = +tk.slice(1) | 0;
+        if (tk[0] === 'r' || tk[0] === 'k') { const o = ES.objs.find(q => q.kind === (tk[0] === 'k' ? 'key' : 'relic') && q.id === id); if (o && !o.taken) escTake(o, false); }
+        else if (tk[0] === 'u') { const lk = ES.locks.find(q => q.id === id); if (lk) escUnlock(lk, false); }
+      }
+    }
+  }
+  escHourTick(dt, t); escDreadTick(dt, t); escAmbient(dt); escHud();
+}
+
+// ================= the report =================
+let escHooked = false;
+function escHook() {                                  // the main game script loads AFTER the modules, so these wrappers are installed on the first frame
+  if (escHooked) return; escHooked = true;
+  const dp = damagePlayer;
+  damagePlayer = function (n) { if (!P.escaped && P.down <= 0 && started) { ES.hits++; ES.hurt += n; } return dp(n); };
+  const de = doEscape;
+  doEscape = function () {
+    de();
+    try {
+      const sec = Math.max(1, Math.round((performance.now() - ES.t0) / 1000)), mm = Math.floor(sec / 60), ss = String(sec % 60).padStart(2, '0');
+      const score = sec / 60 + ES.hits * 1.5 + ES.fell * 2, rank = score < 16 ? 'S' : score < 26 ? 'A' : score < 40 ? 'B' : 'C';
+      const e = $('#escSub'); e.innerHTML = e.textContent + '<br><span style="display:inline-block;margin-top:10px;font-size:14px;opacity:.9">⏱ ' + mm + ':' + ss + ' &nbsp;·&nbsp; 🩸 hits taken ' + ES.hits + ' &nbsp;·&nbsp; 😨 peak dread ' + Math.round(ES.peak) + '% &nbsp;·&nbsp; nerve broken ' + ES.fell + '×</span><br><span style="font-size:28px;font-weight:700;letter-spacing:.2em;color:#ffc27a">RANK ' + rank + '</span>';
+      if (ES.vig) ES.vig.style.opacity = 0; if (ES.pulse) ES.pulse.style.opacity = 0; if (ES.prompt) ES.prompt.style.opacity = 0; if (ES.banner) ES.banner.style.opacity = 0;
+    } catch (err) { }
+  };
+}
+// handy for testing: type escCheat() in the console to grab everything on this level
+window.escCheat = function () { for (const o of ES.objs) if (!o.taken) escTake(o, true); for (const l of ES.locks) escUnlock(l, true); return 'got ' + ES.got + '/' + ES.need; };
+  </script>
+</body>
+
+</html>

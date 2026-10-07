@@ -15,12 +15,12 @@
 'use strict';
 // ---------- tuning ----------
 const LIB = {
-  W: 91, H: 67,            // map size in tiles (the garden is 41 x 31, so this is ~4.8x the area)
-  rooms: 24,               // reading rooms scattered between the aisles
+  W: 71, H: 51,            // map size in tiles, keep both odd (the garden is 41 x 31 and the carnival 61 x 45, so this is ~2.9x the garden)
+  rooms: 14,               // reading rooms scattered between the aisles
   loops: .10,              // chance a wall between two aisles is knocked through (higher = fewer dead ends)
   maxDist: 40,             // nothing further than this is drawn: it is all fog anyway, and it keeps the frame rate up
   fog: .052, fogNight: .034, fogColor: 0x0b0806, hemi: .26,
-  mm: 3                    // minimap pixels per tile
+  mm: 4                    // minimap pixels per tile
 };
 let LV = 0, lvBusy = false;    // current level: 0 = garden, 1 = library
 const LG = {};                 // library geometries (A.lib holds the materials)
@@ -340,6 +340,7 @@ function updateDoors(dt) {
       const dx = x - d.cx, dz = z - d.cz, lat = dx * cs - dz * sn, al = dx * sn + dz * cs;      // across the doorway / along it (+ = room side)
       if (Math.abs(lat) < (d.want ? 2.6 : 1.9) && Math.abs(al) < (d.want ? 3.8 : 2.6)) { near = true; side = al; break; }
     }
+    if (d.locked) near = false;                                                                 // a locked door stays shut (escape.html)
     if (near && !d.want && d.ang < .02) d.dir = side > 0 ? -1 : 1;                                // swing away from whoever opened it
     if (near !== d.want) {
       d.want = near;
