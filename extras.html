@@ -61,7 +61,7 @@ function xBuild() {                                // new level -> reset timers,
     const p = xFree(6, 60); if (!p) continue;
     const m = new THREE.Mesh(new THREE.OctahedronGeometry(.2), new THREE.MeshBasicMaterial({ color: 0xb48cff }));
     m.position.set(p.x, 1.1, p.z); scene.add(m);
-    const l = new THREE.PointLight(0xb48cff, .8, 7); m.add(l);
+    m.add(new THREE.Mesh(new THREE.SphereGeometry(.5, 8, 6), new THREE.MeshBasicMaterial({ color: 0xb48cff, transparent: true, opacity: .16, depthWrite: false, blending: THREE.AdditiveBlending })));
     XS.frags.push({ m, x: p.x, z: p.z, ph: Math.random() * 6 });
   }
 }
@@ -91,7 +91,7 @@ function updateExtras(dt, t) {
   if (outdoor) {
     XS.tt -= dt; if (XS.tt <= 0) { XS.tt = xr(X.thunderEvery); XS.flash = 1; setTimeout(() => { Aud.burst(120, 2.2, .35, .5); Aud.tone(48, 30, 2, .3); }, 500 + Math.random() * 1500); }
   }
-  if (XS.flash > 0) { XS.flash = Math.max(0, XS.flash - dt * 2.5); XS.el.f.style.opacity = (XS.flash > .5 ? .55 : XS.flash * .5).toFixed(2); } else XS.el.f.style.opacity = 0;
+  if (XS.flash > 0) { XS.flash = Math.max(0, XS.flash - dt * 2.5); XS.el.f.style.opacity = (XS.flash > .5 ? .55 : XS.flash * .5).toFixed(2); } else if (XS.el.f.style.opacity !== '0') XS.el.f.style.opacity = 0;
   // heartbeat
   if (P.hp < 45 && P.down <= 0) {
     XS.hb -= dt; if (XS.hb <= 0) { XS.hb = .45 + P.hp / 100; Aud.tone(64, 40, .14, .3); setTimeout(() => Aud.tone(58, 38, .16, .22), 170); }
@@ -137,7 +137,7 @@ function propsBuild() {
   const pick = (a) => a[(R() * a.length) | 0], n = (k) => Math.round(free.length * k);
   if (LV === 0) {                                   // flower patches
     const st = [], hd = [];
-    for (let i = 0, N = n(.09); i < N; i++) {
+    for (let i = 0, N = n(.045); i < N; i++) {
       const [cx, cz] = spot(), col = pick(PAL.flo);
       for (let k = 3 + ((R() * 4) | 0); k > 0; k--) {
         const x = cx + (R() - .5) * 1.1, z = cz + (R() - .5) * 1.1, s = .7 + R() * .7;
@@ -185,7 +185,7 @@ function propsUpdate(dt, t) {
   if (PR.bal) {
     const d = new THREE.Object3D(), m = new THREE.Matrix4(), z = new THREE.Matrix4().makeScale(0, 0, 0);
     for (const b of PR.balD) {
-      if (!b.on) continue;
+      if (!b.on || Math.abs(P.x - b.x) > 30 || Math.abs(P.z - b.z) > 30) continue;
       if (Math.hypot(P.x - b.x, P.z - b.z) < .65) { b.on = false; PR.bal.setMatrixAt(b.i, z); PR.str.setMatrixAt(b.i, z); Aud.burst(2600, .09, .35, .5); Aud.burst(500, .15, .2, .8); Scare.shake = Math.max(Scare.shake, .12); continue; }
       d.position.set(b.x, b.y + Math.sin(t * 1.3 + b.ph) * .06, b.z); d.scale.set(1, 1.25, 1); d.updateMatrix(); PR.bal.setMatrixAt(b.i, d.matrix);
     }

@@ -211,7 +211,7 @@ function updateMimic(dt, t) {
   if (!CFG.mimic || P.escaped) { mimicEnd(); return; }
   if (paused) return;
   const av = Mim.av; Mim.life += dt;
-  const dx = P.x - Mim.x, dz = P.z - Mim.z, dist = Math.hypot(dx, dz), los = mimicLOS(Mim.x, Mim.z, P.x, P.z);
+  const dx = P.x - Mim.x, dz = P.z - Mim.z, dist = Math.hypot(dx, dz), los = dist > 60 ? false : mimicLOS(Mim.x, Mim.z, P.x, P.z);   // far away: skip the sight raycast
   const cosA = dist > .01 ? (-dx * -Math.sin(P.yaw) - dz * -Math.cos(P.yaw)) / dist : 1;      // 1 = you're looking straight at it
   const watched = los && dist < 32 && cosA > .82, inBeam = lightOn() && los && dist < MIMIC.exposeDist && cosA > .95;
   // the real person it is wearing wandering close, or leaving, ruins the trick
@@ -233,7 +233,7 @@ function updateMimic(dt, t) {
     else {
       // weeping-angel rule: it freezes while your light is on it, creeps when you look without one, and rushes when you look away
       const sp = (watched && lightOn()) ? 0 : watched ? MIMIC.creepWatched : MIMIC.creep + Math.min(1.2, Mim.life * .02);
-      Mim.pathT -= dt; if (Mim.pathT <= 0) { Mim.pathT = .6; Mim.path = mimicPath(Mim.x, Mim.z, P.x, P.z); }
+      Mim.pathT -= dt; if (Mim.pathT <= 0) { Mim.pathT = dist > 70 ? 2 : dist > 40 ? 1.1 : .6; Mim.path = mimicPath(Mim.x, Mim.z, P.x, P.z); }
       if (sp > 0) {
         let tx = P.x, tz = P.z;
         if (Mim.path && Mim.path.length) { const w = Mim.path[0]; tx = w.x; tz = w.z; if (Math.hypot(tx - Mim.x, tz - Mim.z) < .45) { Mim.path.shift(); } }
@@ -253,11 +253,11 @@ function updateMimic(dt, t) {
   // always turns to face you, and glides: its legs barely move
   if (dist < 40 || Mim.st !== 'lure') Mim.ry += angDiff(Mim.ry, Math.atan2(-dx, -dz)) * (1 - Math.exp(-6 * dt));
   av.position.set(Mim.x, 0, Mim.z); av.rotation.y = Mim.ry;
-  poseAvatar(av, moving ? .5 : 0, t, 0, Mim.st === 'exposed' ? true : Math.sin(t * 2.3 + Mim.life) > .985);
+  if (dist < (CFG.dist || 45) * 1.3 || Mim.st === 'exposed') poseAvatar(av, moving ? .5 : 0, t, 0, Mim.st === 'exposed' ? true : Math.sin(t * 2.3 + Mim.life) > .985);   // far: no animation
   if (Mim.st !== 'exposed') { Mim.light.x = Mim.x; Mim.light.z = Mim.z; Mim.light.int = Mim.st === 'vanish' ? 0 : .3; }
   // name tag stutters now and then
   Mim.tagT -= dt;
-  if (Mim.tagT <= 0 && Mim.st !== 'exposed') {
+  if (Mim.tagT <= 0 && Mim.st !== 'exposed' && dist < 70) {
     const s = String(Mim.name).slice(0, 24), i = (Math.random() * s.length) | 0;
     Mim.tag.userData.draw(s.slice(0, i) + pick(['▓', '?', '░', '█']) + s.slice(i + 1)); Mim.glitchT = .12; Mim.tagT = 2.5 + Math.random() * 4;
   }

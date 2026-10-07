@@ -408,10 +408,15 @@ function updateRoamers(dt, t) {
   if (!rOn()) { if (RS.m && RS.m.av.visible) RS.m.av.visible = false; return; }
   if (paused || P.freeze) return;
   if (!RS.m) { RS.t -= dt; if (RS.t <= 0) rSpawn(false); return; }
-  const m = RS.m; m.av.visible = true;
-  const c = rSense(m); m.moving = false;
-  RS.t -= dt; if (!RS.shown[m.id] && ((c.los && c.dist < 26) || RS.t < -40)) rCard(m.ty);
-  if (m.id === 'grass') updGrass(m, dt, t, c); else if (m.id === 'book') updBook(m, dt, t, c); else updClown(m, dt, t, c);
+  // AI level of detail: near = every frame; mid (past ~80% of view distance) = ~8 Hz; far (past ~140%) = ~1.5 Hz, hidden, no animation and no line-of-sight raycast.
+  const m = RS.m, vd = CFG.dist || 45, d0 = Math.hypot(P.x - m.x, P.z - m.z), lod = d0 < vd * .8 ? 0 : d0 < vd * 1.4 ? 1 : 2;
+  RS.t -= dt; m.lodT = (m.lodT || 0) + dt;
+  if (lod === 0 || m.lodT >= (lod === 1 ? .12 : .65)) {
+    const step = lod === 0 ? dt : Math.min(m.lodT, .65); m.lodT = 0; m.av.visible = lod < 2;
+    const c = lod === 2 ? { dx: P.x - m.x, dz: P.z - m.z, dist: d0, los: false, face: 0, cosA: 0, down: P.down > 0 } : rSense(m); m.moving = false;
+    if (!RS.shown[m.id] && ((c.los && c.dist < 26) || RS.t < -40)) rCard(m.ty);
+    if (m.id === 'grass') updGrass(m, step, t, c); else if (m.id === 'book') updBook(m, step, t, c); else updClown(m, step, t, c);
+  }
   m.av.position.set(m.x, 0, m.z); m.av.rotation.y = m.ry;
   m.light.x = m.x; m.light.z = m.z; m.light.y = m.id === 'book' ? 2.3 : 1.5;
 }
