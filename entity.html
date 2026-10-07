@@ -180,7 +180,7 @@ function mimicStart() {
   if (!world || !started || Mim.st !== 'idle') return false;
   const spot = mimicSpot(); if (!spot) { Mim.t = 8; return false; }
   const who = mimicWho(), sk = SKINS[who.skin];
-  Mim.av = makeAvatar(sk); Mim.tag = mimicTag(String(who.name).slice(0, 24), sk.accent); Mim.av.add(Mim.tag); Mim.av.position.set(spot.x, 0, spot.z); scene.add(Mim.av);
+  Mim.av = makeAvatar(sk, who.name); Mim.tag = mimicTag(String(who.name).slice(0, 24), sk.accent); Mim.av.add(Mim.tag); Mim.av.position.set(spot.x, 0, spot.z); scene.add(Mim.av);
   Mim.light = { x: spot.x, y: 1.6, z: spot.z, col: 0x9fb4ff, int: .3, d: 5, fl: .35, ph: Math.random() * 9, w: 1 }; DYN.add(Mim.light);   // a faint cold glow — real teammates carry a warm torch
   Object.assign(Mim, { st: 'lure', x: spot.x, z: spot.z, ry: 0, name: who.name, srcId: who.id, targetId: who.id, self: who.self, calls: 0, callT: 1.5 + Math.random() * 2, expose: 0, life: 0, exT: 0, path: null, pathT: 0, tagT: 2 + Math.random() * 2, glitchT: 0, fadeT: 0 });
   return true;

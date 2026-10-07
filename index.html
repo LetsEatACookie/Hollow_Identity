@@ -2150,7 +2150,7 @@
       function angDiff(a, b) { let d = b - a; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; }
       function createRemote(peer) {
         const pr = peer.presence, sk = SKINS[(pr.s | 0) % SKINS.length] || SKINS[0];
-        const av = makeAvatar(sk); av.add(nameSprite(String(pr.n || 'Wanderer').slice(0, 24), sk.accent));
+        const av = makeAvatar(sk, pr.n); av.add(nameSprite(String(pr.n || 'Wanderer').slice(0, 24), sk.accent));
         av.position.set(pr.x, pr.y || 0, pr.z); scene.add(av);
         const light = { x: pr.x, y: 1.7, z: pr.z, col: 0xffe2b0, int: 0, d: 9, fl: .04, ph: Math.random() * 9, w: 1.6 }; DYN.add(light);
         const r = { id: peer.peer, av, sk, light, x: pr.x, y: pr.y || 0, z: pr.z, ry: pr.ry || 0, rp: 0, speed: 0, lastPg: pr.pg ? pr.pg.i : 0, lastFl: pr.fl ? pr.fl.i : 0, stepAcc: 0, trailAcc: 0, pr, name: String(pr.n || 'Wanderer') };
@@ -2173,7 +2173,7 @@
           const moved = Math.hypot(dx, dz) * k; r.x += dx * k; r.z += dz * k; r.y += ((pr.y || 0) - r.y) * k;
           r.speed = lerp(r.speed, moved / Math.max(dt, .001), .15);
           r.ry += angDiff(r.ry, pr.ry || 0) * k; r.rp += ((pr.rp || 0) - r.rp) * k;
-          r.av.position.set(r.x, r.y, r.z); r.av.rotation.y = r.ry; poseAvatar(r.av, r.speed, t, r.rp, !!pr.f);
+          r.av.position.set(r.x, r.y, r.z); r.av.rotation.y = r.ry; poseAvatar(r.av, r.speed, t, r.rp, !!pr.f, typeof VB !== 'undefined' && !!(VB.taps.get(r.id) || {}).talk);
           const pk = Array.isArray(pr.pk) ? pr.pk : [];
           r.light.x = r.x; r.light.z = r.z; r.light.y = r.y + 1.6; r.light.int = (+pr.f || 0) * .9 + (pk.includes('warmsoul') ? 1.1 : 0);
           { const bm = r.av.userData.beam; if (bm) bm.material.uniforms.uI.value = +pr.f || 0; }
