@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - Roamers</title>
+</head>
+
+<body>
+  <!-- ROAMERS: one creature that wanders each map on its own, with its own special ability (its PERK).
+       index.html loads this file at start-up and calls updateRoamers(dt, t) every frame (right after updateMimic).
+       Level 1 (garden)   - THE GRASS MONSTER  perk "Grass Cloak"    : melts into the overgrowth, lies in wait, then lunges as you walk past
+       Level 2 (library)  - THE BOOKWATCHER    perk "Hush"            : while its eyes are open on you, you can't sprint and your torch gutters
+       Level 3 (carnival) - PEPE THE CLOWN     perk "Sticky Fingers"  : steals a hotbar item instead of hurting you; flash him to make him drop it
+       Like the Mimic and the jumpscares they are local to each player (nothing is sent over the network) and they follow the "Jumpscares" setting.
+       Your torch is the universal counter: keep your beam on any of them for a moment and they back off (each reacts differently).
+       Tune everything in the RM object below. Type summonRoamer() in the browser console to bring the current level's roamer out right now. -->
+  <script>
+'use strict';
+// ---------- tuning ----------
+const RM = {
+  grass:  { delay: 25, roam: 1.15, lunge: 5.0, lungeS: 2.4, sight: 7.5, bite: 1.35, dmg: 22, lurk: [14, 26], cool: 28, beamS: .7, beamD: 10 },
+  book:   { delay: 30, roam: 1.25, stalk: 1.9, sight: 15, near: 5.5, bite: 1.5, dmg: 16, read: [4, 9], warn: .9, lose: 5, cool: 16, beamS: 1.4, beamD: 11, hushD: 18 },
+  clown:  { delay: 20, roam: 2.1, chase: 4.1, flee: 4.6, sight: 20, hear: 14, bite: 1.2, pieDmg: 6, honk: [6, 12], loot: 22, cool: 35, beamS: 1.1, beamD: 11 }
+};
+const RT = [
+  { id: 'grass', name: 'The Grass Monster', icon: '🌿', perk: 'Grass Cloak', desc: 'It melts into the overgrowth and lies in wait, then lunges when you walk past. Rustling gives it away, and a steady torch beam flushes it out.', arrive: 'Something is moving in the tall grass…' },
+  { id: 'book', name: 'The Bookwatcher', icon: '📖', perk: 'Hush', desc: 'While its eyes are open on you, you cannot sprint and your torch gutters. Break line of sight to be free. A steady torch beam snaps its book shut.', arrive: 'Pages are turning somewhere between the shelves…' },
+  { id: 'clown', name: 'Pepe the Clown', icon: '🤡', perk: 'Sticky Fingers', desc: 'He steals an item from your hotbar instead of hurting you, then runs. Shine your torch on him to make him drop it. Listen for the horn.', arrive: 'A horn honks in the dark. Someone is giggling…' }
+];
+const RS = { wld: null, lv: -1, m: null, t: 0, card: null, cardT: 0, shown: {} };
+const rOn = () => typeof CFG === 'undefined' || CFG.scares !== false;
+const rLerp = (a, b, k) => a + (b - a) * k;
+const rPick = (a) => a[(Math.random() * a.length) | 0];
+const rRange = (r) => r[0] + Math.random() * (r[1] - r[0]);
+const rVol = (d, r) => clamp(1 - d / (r || 28), 0, 1);
+
+// ---------- pathing over the live map (closed doors count as walls) ----------
+function rOpen(tx, ty) { return tx >= 0 && ty >= 0 && tx < GW && ty < GH && tileV(tx, ty) === 0; }
+function rBFS(sx, sy, maxD) {
+  const n = GW * GH, dist = new Int16Array(n).fill(-1), prev = new Int32Array(n).fill(-1), q = [sy * GW + sx]; dist[q[0]] = 0;
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h]; if (maxD && dist[c] >= maxD) continue; const cx = c % GW, cy = (c / GW) | 0;
+    for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = cx + ax, ny = cy + ay; if (!rOpen(nx, ny)) continue;
+      const ni = ny * GW + nx; if (dist[ni] >= 0) continue; dist[ni] = dist[c] + 1; prev[ni] = c; q.push(ni);
+    }
+  }
+  return { dist, prev };
+}
+function rPathFrom(bfs, sx, sy, ex, ey) {          // tile-centre waypoints, or null if there is no way
+  const goal = ey * GW + ex; if (bfs.dist[goal] < 0) return null;
+  const out = []; for (let c = goal; c !== sy * GW + sx; c = bfs.prev[c]) out.push({ x: ((c % GW) + .5) * T, z: (((c / GW) | 0) + .5) * T });
+  return out.reverse();
+}
+function rPath(fx, fz, tx, tz) {
+  const sx = Math.floor(fx / T), sy = Math.floor(fz / T), ex = Math.floor(tx / T), ey = Math.floor(tz / T);
+  if (sx === ex && sy === ey) return [];
+  return rPathFrom(rBFS(sx, sy, 0), sx, sy, ex, ey);
+}
+function rClear(ax, az, bx, bz) {                  // a straight walk with no wall, hedge or tree in the way?
+  const n = Math.ceil(Math.hypot(bx - ax, bz - az) / (T * .4));
+  for (let i = 0; i <= n; i++) { const k = i / n; if (!rOpen(Math.floor((ax + (bx - ax) * k) / T), Math.floor((az + (bz - az) * k) / T))) return false; }
+  return true;
+}
+// somewhere to wander to: a reachable tile roughly minD..maxD steps away (prefer(x,z) can bias the choice)
+function rWander(m, minD, maxD, prefer) {
+  const sx = Math.floor(m.x / T), sy = Math.floor(m.z / T), bfs = rBFS(sx, sy, maxD), c = [];
+  for (let i = 0; i < bfs.dist.length; i++) if (bfs.dist[i] >= minD) c.push(i);
+  if (!c.length) return null;
+  let best = null, bs = -1;
+  for (let k = 0; k < 6; k++) {
+    const i = rPick(c), x = ((i % GW) + .5) * T, z = (((i / GW) | 0) + .5) * T, s = Math.random() + (prefer ? prefer(x, z) : 0);
+    if (s > bs) { bs = s; best = i; }
+  }
+  const ex = best % GW, ey = (best / GW) | 0; return rPathFrom(bfs, sx, sy, ex, ey);
+}
+function rFar(minD, maxD) {                        // a spawn tile well away from you
+  const px = Math.floor(P.x / T), py = Math.floor(P.z / T), bfs = rBFS(px, py, maxD), c = [];
+  for (let i = 0; i < bfs.dist.length; i++) if (bfs.dist[i] >= minD) c.push(i);
+  if (!c.length) for (let i = 0; i < bfs.dist.length; i++) if (bfs.dist[i] >= Math.min(6, minD)) c.push(i);
+  if (!c.length) return null; const i = rPick(c); return { x: ((i % GW) + .5) * T, z: (((i / GW) | 0) + .5) * T };
+}
+function rFollow(m, dt, sp) {
+  if (!m.path || !m.path.length || sp <= 0) return;
+  const w = m.path[0], dx = w.x - m.x, dz = w.z - m.z, d = Math.hypot(dx, dz);
+  if (d < .3) { m.path.shift(); return; }
+  const s = Math.min(d, sp * dt); m.x += dx / d * s; m.z += dz / d * s; m.moving = true; m.hx = dx / d; m.hz = dz / d;
+}
+function rDirect(m, dt, sp, tx, tz) {              // walk straight at a point (only call when rClear says it is open)
+  const dx = tx - m.x, dz = tz - m.z, d = Math.hypot(dx, dz); if (d < .01) return;
+  const s = Math.min(d, sp * dt); m.x += dx / d * s; m.z += dz / d * s; m.moving = true; m.hx = dx / d; m.hz = dz / d;
+}
+
+// ================= bodies =================
+const rM = (c, o) => LitMat(Object.assign({ color: c, roughness: .9 }, o || {}));
+const rB = (c) => new THREE.MeshBasicMaterial({ color: c });
+const rAdd = (par, geo, mat, x, y, z, rx, ry, rz) => { const o = new THREE.Mesh(geo, mat); o.position.set(x || 0, y || 0, z || 0); o.rotation.set(rx || 0, ry || 0, rz || 0); par.add(o); return o; };
+
+function buildGrass() {                            // a hunched mound of living grass with long arms and two amber eyes
+  const g = new THREE.Group(), body = new THREE.Group(); g.add(body);
+  const dark = rM(0x1b3417, { transparent: true }), mid = rM(0x2f5a24, { transparent: true }), lite = rM(0x56903a, { transparent: true }), soil = rM(0x2b2016, { transparent: true });
+  const torso = rAdd(body, new THREE.SphereGeometry(.55, 12, 9), dark, 0, 1.0, 0); torso.scale.set(1, 1.15, .85);
+  rAdd(body, new THREE.SphereGeometry(.4, 10, 8), mid, 0, 1.5, .26);
+  const head = new THREE.Group(); head.position.set(0, 1.72, -.16); body.add(head);
+  rAdd(head, new THREE.SphereGeometry(.26, 12, 9), soil, 0, 0, 0).scale.set(1, .9, 1.05);
+  rAdd(head, new THREE.BoxGeometry(.3, .09, .2), soil, 0, -.2, -.1);
+  const eyes = new THREE.Group(); head.add(eyes); const em = rB(0xffb43a);
+  for (const s of [-1, 1]) rAdd(eyes, new THREE.SphereGeometry(.05, 8, 6), em, s * .1, .03, -.23);
+  const armG = new THREE.CylinderGeometry(.065, .045, 1.15, 6); armG.translate(0, -.57, 0);
+  const arms = [];
+  for (const s of [-1, 1]) {
+    const a = new THREE.Group(); a.position.set(s * .58, 1.38, 0); body.add(a); rAdd(a, armG, dark, 0, 0, 0);
+    for (let k = -1; k <= 1; k++) rAdd(a, new THREE.ConeGeometry(.025, .22, 4), soil, k * .045, -1.22, 0, 0, 0, k * .25);
+    a.rotation.x = -.5; arms.push(a);
+  }
+  const legs = [];
+  for (const s of [-1, 1]) { const l = new THREE.Group(); l.position.set(s * .26, .62, .08); body.add(l); const lg = new THREE.CylinderGeometry(.14, .1, .62, 7); lg.translate(0, -.3, 0); rAdd(l, lg, dark, 0, 0, 0); legs.push(l); }
+  const bladeG = new THREE.ConeGeometry(.045, 1, 4); bladeG.translate(0, .5, 0);
+  const blades = [], cols = [dark, mid, lite];
+  for (let i = 0; i < 64; i++) {
+    const a = Math.random() * 6.283, h = .25 + Math.random() * 1.45, r = .35 + Math.random() * .25, len = .45 + Math.random() * .85;
+    const b = rAdd(body, bladeG, cols[i % 3], Math.cos(a) * r, h, Math.sin(a) * r * .8, Math.sin(a) * .5, 0, -Math.cos(a) * .5);
+    b.scale.set(1, len, 1); b.userData.ph = Math.random() * 6; b.userData.rz = b.rotation.z; blades.push(b);
+  }
+  g.userData = { body, head, eyes, arms, legs, blades, fade: [dark, mid, lite, soil] };
+  return g;
+}
+function buildBook() {                             // a tall hooded robe, bony hands, and an open book where its face should be
+  const g = new THREE.Group(), body = new THREE.Group(); g.add(body);
+  const robe = rM(0x2a1717, { side: THREE.DoubleSide }), trim = rM(0x5a2f22), cover = rM(0x4a1c1c), page = rM(0xe3d6b0, { emissive: 0x3a2e14, emissiveIntensity: .5 }), bone = rM(0xcfc6b0);
+  rAdd(body, new THREE.CylinderGeometry(.2, .66, 2.05, 14, 1, true), robe, 0, 1.2, 0);
+  rAdd(body, new THREE.TorusGeometry(.64, .03, 6, 20), trim, 0, .2, 0, Math.PI / 2);
+  rAdd(body, new THREE.SphereGeometry(.3, 12, 8), robe, 0, 2.15, 0).scale.set(1.2, .6, .8);
+  const bk = new THREE.Group(); bk.position.set(0, 2.55, -.12); body.add(bk);
+  rAdd(bk, new THREE.BoxGeometry(.06, .76, .08), cover, 0, 0, .02);
+  const eyeList = [], eyeMat = rB(0xffcf5a), pupMat = rB(0x701010);
+  const leaves = [];
+  for (const s of [-1, 1]) {
+    const lf = new THREE.Group(); lf.position.set(s * .24, 0, -.08); lf.rotation.y = s * .38; bk.add(lf); leaves.push(lf);
+    rAdd(lf, new THREE.BoxGeometry(.5, .72, .03), cover, 0, 0, .03);
+    rAdd(lf, new THREE.BoxGeometry(.46, .66, .02), page, 0, 0, -.005);
+    for (let k = 0; k < 3; k++) {
+      const e = new THREE.Group(); e.position.set(s * .02, .22 - k * .22, -.03); lf.add(e); eyeList.push(e);
+      const w = rAdd(e, new THREE.SphereGeometry(.07, 8, 6), eyeMat, 0, 0, 0); w.scale.set(1, .65, .4);
+      const p = rAdd(e, new THREE.SphereGeometry(.028, 6, 5), pupMat, 0, 0, -.02); p.scale.set(1, 1, .5);
+      e.userData.k = k;
+    }
+  }
+  const armG = new THREE.CylinderGeometry(.035, .025, 1.0, 5); armG.translate(0, -.5, 0);
+  const arms = [];
+  for (const s of [-1, 1]) {
+    const a = new THREE.Group(); a.position.set(s * .3, 2.12, 0); body.add(a); rAdd(a, armG, bone, 0, 0, 0);
+    for (let k = -1; k <= 1; k++) rAdd(a, new THREE.CylinderGeometry(.01, .006, .2, 4), bone, k * .03, -1.08, 0, 0, 0, k * .2);
+    a.rotation.set(-1.1, 0, s * -.35); arms.push(a);
+  }
+  const pages = [], pg = new THREE.PlaneGeometry(.22, .3);
+  for (let i = 0; i < 6; i++) { const p = rAdd(g, pg, rM(0xe9deb8, { side: THREE.DoubleSide, emissive: 0x3a2e14, emissiveIntensity: .4 }), 0, 0, 0); p.userData = { a: i / 6 * 6.283, h: 1.6 + Math.random() * 1.2, r: .85 + Math.random() * .3, sp: .4 + Math.random() * .5 }; pages.push(p); }
+  g.userData = { body, bk, eyeList, leaves, arms, pages };
+  return g;
+}
+function buildClown() {                            // baggy suit, huge shoes, rainbow hair, a bike horn and a fistful of balloons
+  const g = new THREE.Group(), body = new THREE.Group(); g.add(body);
+  const red = rM(0xd8333c), yel = rM(0xf0c030), blu = rM(0x2f7fd0), wht = rM(0xf4f0e6), face = rM(0xf1ede2, { roughness: .6 }), blk = rM(0x151515);
+  const nose = rB(0xff2a2a), mouth = rB(0xb01018);
+  const legG = new THREE.CylinderGeometry(.15, .13, .78, 8); legG.translate(0, -.39, 0);
+  const legs = [];
+  for (const s of [-1, 1]) {
+    const l = new THREE.Group(); l.position.set(s * .15, .86, 0); body.add(l); rAdd(l, legG, s < 0 ? blu : yel, 0, 0, 0);
+    rAdd(l, new THREE.BoxGeometry(.3, .14, .62), red, 0, -.78, -.12); rAdd(l, new THREE.SphereGeometry(.15, 8, 6), wht, 0, -.7, -.38).scale.set(1, .6, 1); legs.push(l);
+  }
+  const torso = rAdd(body, new THREE.CylinderGeometry(.34, .3, .75, 12), red, 0, 1.25, 0);
+  for (let i = 0; i < 8; i++) { const a = i / 8 * 6.283; const d = rAdd(body, new THREE.SphereGeometry(.06, 6, 5), wht, Math.cos(a) * .33, 1.1 + (i % 3) * .2, Math.sin(a) * .33); d.scale.set(1, 1, .3); d.rotation.y = -a + Math.PI / 2; }
+  rAdd(body, new THREE.TorusGeometry(.3, .09, 8, 16), wht, 0, 1.65, 0, Math.PI / 2);
+  const head = new THREE.Group(); head.position.y = 1.95; body.add(head);
+  rAdd(head, new THREE.SphereGeometry(.24, 14, 10), face, 0, 0, 0);
+  rAdd(head, new THREE.SphereGeometry(.065, 8, 6), nose, 0, -.02, -.235);
+  for (const s of [-1, 1]) { rAdd(head, new THREE.SphereGeometry(.03, 6, 5), blk, s * .09, .06, -.215); rAdd(head, new THREE.BoxGeometry(.05, .05, .02), blu, s * .09, .13, -.2, 0, 0, Math.PI / 4); }
+  const sm = rAdd(head, new THREE.TorusGeometry(.13, .022, 6, 16, Math.PI), mouth, 0, -.02, -.2, 0, 0, Math.PI); sm.scale.set(1.15, 1, 1);
+  const hair = [0xff4a4a, 0xffa030, 0xffe040, 0x50d070, 0x40a0ff, 0xb060ff];
+  for (let i = 0; i < 12; i++) { const f = .9 + i / 11 * (6.283 - 1.8), c = rM(hair[i % 6], { roughness: .7 }); rAdd(head, new THREE.SphereGeometry(.11, 8, 6), c, Math.sin(f) * .25, .1 + Math.sin(f * 2) * .04, -Math.cos(f) * .25); }
+  rAdd(head, new THREE.ConeGeometry(.13, .3, 10), rM(0xb060ff), 0, .34, .02, -.15, 0, .2);
+  const armG = new THREE.CylinderGeometry(.08, .065, .62, 8); armG.translate(0, -.31, 0);
+  const arms = [];
+  for (const s of [-1, 1]) { const a = new THREE.Group(); a.position.set(s * .4, 1.52, 0); body.add(a); rAdd(a, armG, s < 0 ? yel : red, 0, 0, 0); rAdd(a, new THREE.SphereGeometry(.09, 8, 6), wht, 0, -.66, 0); arms.push(a); }
+  const horn = new THREE.Group(); horn.position.set(0, -.78, -.06); arms[1].add(horn);
+  rAdd(horn, new THREE.ConeGeometry(.07, .22, 8), rM(0xc9a24a, { metalness: .6, roughness: .4 }), 0, 0, -.12, -Math.PI / 2); rAdd(horn, new THREE.SphereGeometry(.08, 8, 6), red, 0, 0, .02);
+  const bal = new THREE.Group(); bal.position.set(0, -.7, 0); arms[0].add(bal);
+  const bc = [0xd8333c, 0xf0c030, 0x2f7fd0, 0xe05aa0, 0x40b060], balls = [];
+  for (let i = 0; i < 5; i++) {
+    const a = i / 5 * 6.283, bx = Math.cos(a) * .3, bz = Math.sin(a) * .3, by = 1.9 + (i % 2) * .35;
+    const s = rAdd(bal, new THREE.CylinderGeometry(.004, .004, by, 3), wht, bx * .5, by / 2, bz * .5); s.rotation.set(bz / by, 0, -bx / by); s.scale.set(1, 1, 1);
+    const b = rAdd(bal, new THREE.SphereGeometry(.21, 10, 8), rM(bc[i], { emissive: bc[i], emissiveIntensity: .22, roughness: .35 }), bx, by + .2, bz); b.scale.y = 1.2; b.userData.ph = i * 1.3; balls.push(b);
+  }
+  const loot = rAdd(g, new THREE.OctahedronGeometry(.17), rB(0xffffff), 0, 2.9, 0); loot.visible = false;
+  g.userData = { body, head, arms, legs, horn, bal, balls, loot };
+  return g;
+}
+
+// ================= spawning / bookkeeping =================
+function rKill() {
+  const m = RS.m; if (!m) return;
+  if (m.av) { scene.remove(m.av); m.av.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); }
+  if (m.light) DYN.delete(m.light);
+  RS.m = null;
+}
+function rBuild() {                                // a new level just started: forget the old roamer and schedule the new one
+  rKill(); RS.wld = world; RS.lv = LV; RS.t = (RM[RT[LV] ? RT[LV].id : 'grass'] || RM.grass).delay;
+}
+function rSpawn(force) {
+  const ty = RT[LV]; if (!ty) return false;
+  const spot = rFar(force ? 6 : 16, force ? 18 : 40); if (!spot) { RS.t = 6; return false; }
+  const av = ty.id === 'grass' ? buildGrass() : ty.id === 'book' ? buildBook() : buildClown();
+  av.position.set(spot.x, 0, spot.z); scene.add(av);
+  const col = ty.id === 'grass' ? 0x9bff7a : ty.id === 'book' ? 0xffc27a : 0xff7ab0;
+  const light = { x: spot.x, y: 1.5, z: spot.z, col, int: ty.id === 'grass' ? .12 : .35, d: 5.5, fl: .3, ph: Math.random() * 9, w: 1 }; DYN.add(light);
+  const m = { ty, id: ty.id, av, light, x: spot.x, z: spot.z, ry: Math.random() * 6.28, st: 'roam', stT: 0, path: null, pathT: 0, hx: 0, hz: -1, moving: false,
+    cloak: 0, cool: 6, beam: 0, vis: 0, honkT: rRange(RM.clown.honk), rustT: 0, hush: 0, seenT: 0, losT: 0, warn: 0, loot: null, lootT: 0, lungeT: 0, wait: 0, hushToast: false, born: Math.random() * 9 };
+  RS.m = m; m.av.visible = true; return true;
+}
+function rCard(ty) {                               // one-time "meet the roamer" card with its perk
+  if (RS.shown[ty.id]) return; RS.shown[ty.id] = 1;
+  if (!RS.card) {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;left:50%;top:15%;transform:translateX(-50%);max-width:min(420px,86vw);padding:12px 18px;border-radius:12px;background:rgba(10,12,10,.82);border:1px solid rgba(255,255,255,.18);color:#e8efe6;font:500 14px/1.4 Inter,system-ui,sans-serif;text-align:center;z-index:13;pointer-events:none;opacity:0;transition:opacity .6s;box-shadow:0 6px 30px rgba(0,0,0,.5)';
+    document.body.appendChild(d); RS.card = d;
+  }
+  RS.card.innerHTML = '<div style="font-size:12px;letter-spacing:.14em;opacity:.65">ROAMING THIS LEVEL</div><div style="font-size:19px;font-weight:700;margin:3px 0">' + ty.icon + ' ' + ty.name + '</div><div style="color:#ffc27a;font-weight:600">Perk: ' + ty.perk + '</div><div style="opacity:.85;font-size:13px;margin-top:2px">' + ty.desc + '</div>';
+  RS.card.style.opacity = 1; RS.cardT = 9;
+}
+
+// ================= shared senses =================
+function rSense(m) {
+  const dx = P.x - m.x, dz = P.z - m.z, dist = Math.hypot(dx, dz), los = mimicLOS(m.x, m.z, P.x, P.z);
+  const fw = { x: -Math.sin(m.ry), z: -Math.cos(m.ry) }, face = dist > .01 ? (dx * fw.x + dz * fw.z) / dist : 1;           // 1 = it is looking straight at you
+  const cosA = dist > .01 ? (-dx * -Math.sin(P.yaw) - dz * -Math.cos(P.yaw)) / dist : 1;                                    // 1 = you are looking straight at it
+  return { dx, dz, dist, los, face, cosA, down: P.down > 0 };
+}
+function rBeam(m, c, S, D, dt) {                   // is your torch steadily on it? (accumulates m.beam seconds)
+  const on = lightOn() && c.los && c.dist < D && c.cosA > .94;
+  m.beam = on ? m.beam + dt : Math.max(0, m.beam - dt * .8); return m.beam > S;
+}
+function rTurn(m, dt, target, k) { m.ry += angDiff(m.ry, target) * (1 - Math.exp(-(k || 7) * dt)); }
+
+// ================= THE GRASS MONSTER =================
+function updGrass(m, dt, t, c) {
+  const R = RM.grass; m.cool = Math.max(0, m.cool - dt);
+  let sp = 0, cloakT = .55;
+  if (m.st === 'roam') {
+    sp = R.roam; cloakT = .6;
+    if (!m.path || !m.path.length) { m.wait -= dt; sp = 0; if (m.wait <= 0) { m.path = rWander(m, 7, 22, (x, z) => { const tp = tileType(x, z); return tp === 3 || tp === 4 ? .5 : 0; }); m.wait = 1 + Math.random() * 2; if (!m.path || !m.path.length) { m.st = 'lurk'; m.stT = rRange(R.lurk); } } }
+    else if (m.path.length < 2 && Math.random() < dt * .25) { m.st = 'lurk'; m.stT = rRange(R.lurk); }
+    if (c.los && c.dist < R.sight && !c.down && m.cool <= 0 && Math.random() < dt * 1.5) { m.st = 'lunge'; m.lungeT = 0; Aud.burst(180, .45, .28 * rVol(c.dist), .6); Aud.tone(120, 60, .45, .16 * rVol(c.dist), 'sawtooth'); }
+  } else if (m.st === 'lurk') {
+    cloakT = 1; m.stT -= dt;
+    if (c.los && c.dist < R.sight && !c.down && m.cool <= 0) { m.st = 'lunge'; m.lungeT = 0; Aud.burst(180, .45, .3 * rVol(c.dist), .6); Aud.tone(120, 60, .45, .18 * rVol(c.dist), 'sawtooth'); Scare.shake = Math.max(Scare.shake, .3); }
+    else if (m.stT <= 0) { m.st = 'roam'; m.path = null; m.wait = 0; }
+  } else if (m.st === 'lunge') {
+    cloakT = 0; m.lungeT += dt; sp = 0;
+    if (rClear(m.x, m.z, P.x, P.z)) rDirect(m, dt, R.lunge, P.x, P.z);
+    else { m.pathT -= dt; if (m.pathT <= 0) { m.pathT = .4; m.path = rPath(m.x, m.z, P.x, P.z); } rFollow(m, dt, R.lunge * .85); }
+    if (c.dist < R.bite) { Aud.stinger(.8); scareFlash(true); Scare.shake = 1; P.stam = Math.max(0, P.stam - 45); damagePlayer(R.dmg); toast('The grass bit back.'); m.st = 'flee'; m.stT = 6; m.cool = R.cool; m.path = rWander(m, 8, 20); }
+    else if (m.lungeT > R.lungeS || c.dist > R.sight * 2.2) { m.st = 'roam'; m.cool = R.cool * .6; m.path = null; m.wait = 0; }
+  } else if (m.st === 'flee') {
+    cloakT = 0; m.stT -= dt; sp = 3.4; if (!m.path || !m.path.length) m.path = rWander(m, 8, 20);
+    if (m.stT <= 0) { m.st = 'roam'; m.path = null; m.wait = 0; }
+  }
+  // your torch flushes it out of hiding
+  if ((m.st === 'lurk' || m.st === 'roam') && rBeam(m, c, R.beamS, R.beamD, dt)) {
+    m.st = 'flee'; m.stT = 7; m.cool = R.cool; m.beam = 0; m.path = rWander(m, 8, 20); Aud.stinger(.5); Aud.tone(240, 90, .6, .14 * rVol(c.dist), 'sawtooth'); scareFlash(false); toast('The grass monster shrieks and bolts from the light.');
+  }
+  if (m.st !== 'lunge') rFollow(m, dt, sp);
+  m.cloak = rLerp(m.cloak, cloakT, 1 - Math.exp(-3 * dt));
+  if (m.moving) { m.rustT -= dt; if (m.rustT <= 0) { m.rustT = m.st === 'lunge' ? .14 : .4; Aud.burst(1600, .16, .09 * rVol(c.dist, 24), .5); } }
+  // pose
+  const u = m.av.userData, cl = m.cloak, sw = m.moving ? (m.st === 'lunge' ? 9 : 4) : 1.3, s = Math.sin(t * sw);
+  u.body.scale.set(1 + cl * .2, rLerp(1, .5, cl), 1 + cl * .2); u.body.position.y = -cl * .05 + (m.moving ? Math.abs(s) * .06 : 0);
+  u.arms[0].rotation.x = u.arms[1].rotation.x = m.st === 'lunge' ? -1.5 : -.5 + (m.moving ? s * .35 : 0);
+  u.legs[0].rotation.x = m.moving ? s * .6 : 0; u.legs[1].rotation.x = m.moving ? -s * .6 : 0;
+  u.blades.forEach(b => { b.rotation.z = b.userData.rz + Math.sin(t * 1.6 + b.userData.ph) * .12; });
+  const o = rLerp(1, .22, cl); u.fade.forEach(mt => { mt.opacity = o; });
+  u.eyes.visible = c.dist < 12 || m.cloak < .5; u.eyes.scale.setScalar(m.cloak > .5 ? (Math.sin(t * 1.7 + m.born) > .85 ? .15 : .8) : 1);
+  m.light.int = (.12 + (1 - cl) * .18);
+}
+
+// ================= THE BOOKWATCHER =================
+function updBook(m, dt, t, c) {
+  const R = RM.book; m.cool = Math.max(0, m.cool - dt);
+  let sp = 0, eyes = 0, watching = false;
+  const sees = !c.down && c.los && ((c.dist < R.near) || (c.dist < R.sight && c.face > .35 && m.st !== 'read'));
+  if (m.st === 'roam') {
+    sp = R.roam; if (!m.path || !m.path.length) { m.path = rWander(m, 6, 24); m.wait = rRange(R.read); if (!m.path || !m.path.length) { m.st = 'read'; m.stT = rRange(R.read); } }
+    else if (m.path.length < 1.5 && Math.random() < dt * .3) { m.st = 'read'; m.stT = rRange(R.read); }
+    if (sees && m.cool <= 0) { m.st = 'watch'; m.warn = 0; Aud.soft(110, 96, 1.6, .06 * rVol(c.dist)); Aud.burst(3200, .14, .06 * rVol(c.dist), .7); }
+  } else if (m.st === 'read') {
+    m.stT -= dt; if (m.stT <= 0) { m.st = 'roam'; m.path = null; }
+    else { m.pgT = (m.pgT || 0) - dt; if (m.pgT <= 0) { m.pgT = 1.2 + Math.random() * 2; Aud.burst(3200, .1, .035 * rVol(c.dist, 22), .7); } }
+    if (sees && c.dist < R.near && m.cool <= 0) { m.st = 'watch'; m.warn = 0; Aud.soft(110, 96, 1.6, .06 * rVol(c.dist)); }
+  } else if (m.st === 'watch') {                   // eyes snap open: a moment of warning, then it comes for you
+    eyes = 1; watching = true; m.warn += dt; rTurn(m, dt, Math.atan2(-c.dx, -c.dz), 9);
+    if (m.warn > R.warn) { m.st = 'stalk'; m.losT = 0; toast('The Bookwatcher sees you.'); }
+    if (!c.los) { m.st = 'roam'; m.path = null; }
+  } else if (m.st === 'stalk') {
+    eyes = 1; watching = c.los && c.dist < R.hushD; sp = R.stalk;
+    m.losT = c.los ? 0 : m.losT + dt; if (m.losT > R.lose || c.down) { m.st = 'roam'; m.path = null; m.cool = 6; }
+    m.pathT -= dt; if (m.pathT <= 0) { m.pathT = .45; m.path = rPath(m.x, m.z, P.x, P.z); }
+    if (rClear(m.x, m.z, P.x, P.z) && c.dist < 6) { rDirect(m, dt, sp, P.x, P.z); sp = 0; }
+    if (c.dist < R.bite) { Aud.stinger(.7); Aud.burst(220, .3, .35, .8); scareFlash(true); Scare.shake = .9; P.flickT = 2.2; damagePlayer(R.dmg); toast('A page cut deep.'); m.st = 'cool'; m.stT = R.cool; m.cool = R.cool; m.path = rWander(m, 10, 24); }
+  } else if (m.st === 'cool') {                    // book slams shut: it drifts away and goes back to reading
+    m.stT -= dt; sp = R.roam * 1.4; if (!m.path || !m.path.length) m.path = rWander(m, 8, 24);
+    if (m.stT <= 0) { m.st = 'roam'; m.path = null; }
+  } else if (m.st === 'stun') {
+    m.stT -= dt; if (m.stT <= 0) { m.st = 'read'; m.stT = rRange(R.read); }
+  }
+  // a steady torch beam while its eyes are open snaps the book shut
+  if ((m.st === 'watch' || m.st === 'stalk') && rBeam(m, c, R.beamS, R.beamD, dt)) {
+    m.st = 'stun'; m.stT = 4; m.cool = R.cool; m.beam = 0; Aud.burst(260, .25, .3 * rVol(c.dist), .8); Aud.tone(180, 70, .4, .12 * rVol(c.dist), 'sawtooth'); toast('The Bookwatcher recoils from the light.');
+  }
+  // Hush: it silences you while its eyes are on you
+  if (watching && c.los && !c.down) {
+    P.exh = true; P.stam = Math.min(P.stam, 25);
+    if (Math.random() < dt * 1.4) P.flickT = Math.max(P.flickT, .16);
+    m.hush += dt; if (m.hush > 1 && !m.hushToast) { m.hushToast = true; toast('Hush… its gaze weighs on you. Break line of sight.'); }
+  } else m.hush = Math.max(0, m.hush - dt);
+  rFollow(m, dt, sp);
+  if (m.st !== 'watch') { if (m.moving) rTurn(m, dt, Math.atan2(-m.hx, -m.hz), 5); else if (m.st === 'stalk') rTurn(m, dt, Math.atan2(-c.dx, -c.dz), 6); }
+  // pose: it hovers, pages orbit, eyes blink open
+  const u = m.av.userData;
+  m.vis = rLerp(m.vis, eyes, 1 - Math.exp(-(eyes ? 10 : 4) * dt));
+  u.body.position.y = .18 + Math.sin(t * 1.4 + m.born) * .07; u.body.rotation.z = m.moving ? Math.sin(t * 2) * .03 : 0;
+  u.bk.rotation.x = m.st === 'stun' || m.st === 'cool' ? -.7 : (m.st === 'read' ? .35 : 0);
+  u.leaves.forEach((lf, i) => { lf.rotation.y = (i ? 1 : -1) * (m.st === 'stun' || m.st === 'cool' ? .08 : .38 + Math.sin(t * 1.8) * .02); });
+  u.eyeList.forEach((e) => { const k = e.userData.k, blink = Math.sin(t * 2.3 + k * 1.7) > .94 ? .12 : 1; e.scale.set(1, Math.max(.001, m.vis * blink), 1); e.visible = m.vis > .02; });
+  u.arms[0].rotation.x = u.arms[1].rotation.x = -1.1 + Math.sin(t * 1.1) * .08;
+  u.pages.forEach(p => { const d = p.userData; d.a += dt * d.sp * (m.st === 'stalk' ? 3 : 1); p.position.set(Math.cos(d.a) * d.r, d.h + Math.sin(d.a * 2) * .12, Math.sin(d.a) * d.r); p.rotation.set(Math.sin(d.a) * .6, d.a, Math.cos(d.a * 1.3) * .5); });
+  m.light.int = .22 + m.vis * .25;
+}
+
+// ================= PEPE THE CLOWN =================
+function rHonk(m, c) { const v = rVol(c.dist, 34); if (v > .01) { Aud.tone(390, 330, .22, .13 * v, 'sawtooth'); Aud.tone(195, 165, .22, .08 * v, 'square'); } }
+function rGiggle(m, c) { const v = rVol(c.dist, 30); if (v <= .01) return; for (let i = 0; i < 5; i++) setTimeout(() => Aud.tone(640 + i * 70 + Math.random() * 40, 520 + i * 30, .07, .06 * v, 'triangle'), i * 85); }
+function rSteal() {                                // takes one thing from a random hotbar slot (or null)
+  const have = []; INV.slots.forEach((s, i) => { if (s) have.push(i); });
+  if (!have.length) return null;
+  const i = rPick(have), s = INV.slots[i], t = s.t; if (--s.n <= 0) INV.slots[i] = null; itemsHud(); return t;
+}
+function updClown(m, dt, t, c) {
+  const R = RM.clown; m.cool = Math.max(0, m.cool - dt);
+  let sp = 0, anim = 0;
+  m.honkT -= dt; if (m.honkT <= 0) { m.honkT = rRange(R.honk) * (m.st === 'chase' ? .5 : 1); rHonk(m, c); if (Math.random() < .5) setTimeout(() => rGiggle(m, c), 320); }
+  const hears = !c.down && c.dist < R.hear && P.speed > 4.4, sees = !c.down && c.los && c.dist < R.sight;
+  if (m.st === 'roam') {
+    sp = R.roam; if (!m.path || !m.path.length) { m.wait -= dt; sp = 0; if (m.wait <= 0) { m.path = rWander(m, 8, 26); m.wait = .5 + Math.random() * 2.5; } }
+    if ((sees || hears) && m.cool <= 0) { m.st = 'chase'; m.stT = 0; rGiggle(m, c); }
+  } else if (m.st === 'chase') {
+    sp = R.chase; m.stT += dt; anim = 1;
+    m.pathT -= dt; if (m.pathT <= 0) { m.pathT = .45; m.path = rPath(m.x, m.z, P.x, P.z); }
+    if (rClear(m.x, m.z, P.x, P.z) && c.dist < 7) { rDirect(m, dt, sp, P.x, P.z); sp = 0; }
+    if (c.down) { m.st = 'roam'; m.path = null; }
+    else if ((!c.los && m.stT > 14) || c.dist > 45) { m.st = 'roam'; m.path = null; m.cool = 8; }
+    if (c.dist < R.bite) {
+      const it = rSteal();
+      if (it) { m.loot = it; m.lootT = R.loot; const d = ITEM.types[it]; toast('Pepe stole your ' + d.name + '! Shine your torch on him to get it back.'); m.av.userData.loot.material.color.setHex(d.col); Aud.stinger(.4); }
+      else { toast('A pie to the face. Pepe thinks that’s hilarious.'); damagePlayer(R.pieDmg); P.flickT = 2.5; }
+      scareFlash(false); Scare.shake = .5; rGiggle(m, c); rHonk(m, c);
+      m.st = 'flee'; m.stT = it ? R.loot : 7; m.cool = R.cool; m.beam = 0; m.path = rWander(m, 12, 30);
+    }
+  } else if (m.st === 'flee') {
+    sp = R.flee; anim = 1; m.stT -= dt; if (!m.path || !m.path.length) m.path = rWander(m, 12, 30);
+    if (m.loot && rBeam(m, c, R.beamS, R.beamD, dt)) {   // a steady beam makes him fumble the loot
+      const d = ITEM.types[m.loot]; if (itemAdd(m.loot)) toast('Pepe dropped your ' + d.name + '!'); else toast('Pepe dropped your ' + d.name + ' — but your hotbar is full.');
+      m.loot = null; m.beam = 0; m.st = 'dizzy'; m.stT = 3; Aud.tone(300, 120, .4, .12 * rVol(c.dist), 'sawtooth'); rHonk(m, c);
+    } else if (m.stT <= 0) { if (m.loot) toast('Pepe pocketed your ' + ITEM.types[m.loot].name + ' for good.'); m.loot = null; m.st = 'roam'; m.path = null; m.wait = 0; }
+  } else if (m.st === 'dizzy') {
+    m.stT -= dt; if (m.stT <= 0) { m.st = 'roam'; m.path = null; m.wait = 0; }
+  }
+  rFollow(m, dt, sp);
+  if (m.moving) rTurn(m, dt, Math.atan2(-m.hx, -m.hz), 8); else if (m.st === 'chase') rTurn(m, dt, Math.atan2(-c.dx, -c.dz), 8);
+  // pose: skipping, balloons bobbing, juggled loot floating over his head
+  const u = m.av.userData, sw = t * (m.moving ? (anim ? 11 : 7) : 2), s = Math.sin(sw);
+  u.body.position.y = m.moving ? Math.abs(Math.sin(sw)) * .16 : 0; u.body.rotation.z = m.st === 'dizzy' ? Math.sin(t * 9) * .25 : (m.moving ? s * .06 : 0);
+  u.legs[0].rotation.x = m.moving ? s * .8 : 0; u.legs[1].rotation.x = m.moving ? -s * .8 : 0;
+  u.arms[0].rotation.x = m.moving ? -s * .6 : 0; u.arms[1].rotation.x = anim ? -1.2 + Math.sin(t * 14) * .2 : (m.moving ? s * .6 : 0);
+  u.head.rotation.z = Math.sin(t * 1.3) * .12; u.head.rotation.x = m.st === 'dizzy' ? .3 : 0;
+  u.balls.forEach(b => { b.position.y += Math.sin(t * 1.5 + b.userData.ph) * .0015; });
+  u.bal.rotation.z = Math.sin(t * 1.2) * .08;
+  u.loot.visible = !!m.loot; if (m.loot) { u.loot.position.set(Math.cos(t * 4) * .35, 2.65 + Math.sin(t * 6) * .12, Math.sin(t * 4) * .35); u.loot.rotation.y = t * 5; }
+  m.light.int = m.loot ? .5 : .3;
+}
+
+// ================= main update =================
+function updateRoamers(dt, t) {
+  if (RS.card && RS.cardT > 0) { RS.cardT -= dt; if (RS.cardT <= 0) RS.card.style.opacity = 0; }
+  if (!started || !world || P.escaped) { if (RS.m) rKill(); RS.wld = null; return; }
+  if (RS.wld !== world) rBuild();
+  if (!rOn()) { if (RS.m && RS.m.av.visible) RS.m.av.visible = false; return; }
+  if (paused || P.freeze) return;
+  if (!RS.m) { RS.t -= dt; if (RS.t <= 0) rSpawn(false); return; }
+  const m = RS.m; m.av.visible = true;
+  const c = rSense(m); m.moving = false;
+  RS.t -= dt; if (!RS.shown[m.id] && ((c.los && c.dist < 26) || RS.t < -40)) rCard(m.ty);
+  if (m.id === 'grass') updGrass(m, dt, t, c); else if (m.id === 'book') updBook(m, dt, t, c); else updClown(m, dt, t, c);
+  m.av.position.set(m.x, 0, m.z); m.av.rotation.y = m.ry;
+  m.light.x = m.x; m.light.z = m.z; m.light.y = m.id === 'book' ? 2.3 : 1.5;
+}
+// handy for testing: type summonRoamer() in the browser console once you're in a level
+window.summonRoamer = function () { if (!started || !world) return 'start a game first'; if (RS.m) return 'already out there: ' + RS.m.ty.name; RS.shown = {}; return rSpawn(true) ? RT[LV].name + ' is coming' : 'no spot found, try again'; };
+  </script>
+</body>
+
+</html>
