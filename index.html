@@ -2,6 +2,7 @@
 <html lang="en">
 
 <head>
+  <link rel="icon" href="data:,">
   <meta charset="utf-8">
   <title>Hollow Identity — co-op dark maze</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -1541,7 +1542,7 @@
       let maxAniso = 4;
       function mk(w, h, paint, o = {}) {
         const c = document.createElement('canvas'); c.width = w; c.height = h;
-        const x = c.getContext('2d'); paint(x, w, h);
+        const x = c.getContext('2d', { willReadFrequently: true }); paint(x, w, h);
         const t = new THREE.CanvasTexture(c);
         if (o.repeat !== false) { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
         if (o.srgb !== false) t.encoding = THREE.sRGBEncoding;
