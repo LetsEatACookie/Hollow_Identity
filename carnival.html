@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - the Abandoned Carnival</title>
+</head>
+
+<body>
+  <!-- ALL ABOUT LEVEL 3, THE ABANDONED CARNIVAL: the generator, the builder, its textures and the level switch (carEnter).
+       index.html loads this file at start-up and runs the script below as part of the game. You get here through the library's way out.
+       It is the same size as the library, twice the garden (59 x 43 tiles vs 41 x 31): a funhouse-style maze of painted boards, a midway with stalls,
+       and sealed striped tents. Every tent is a real closed room with exactly ONE door (the working door from library.html) and pickups inside (items.html).
+       Everyone in a room gets the same carnival (seeded from the room code). -->
+  <script>
+'use strict';
+// ---------- tuning ----------
+const CAR = {
+  W: 59, H: 43,            // 2x the garden (41 x 31), same as the library. Keep both odd.
+  tents: 11,               // sealed tents / backstage rooms, each with one door and items inside
+  loops: .12,              // chance a wall between two lanes is knocked through (higher = fewer dead ends)
+  maxDist: 38,             // nothing further than this is drawn (fog anyway)
+  fog: .056, fogNight: .036, fogColor: 0x0a0610, hemi: .30,
+  mm: 4                    // minimap pixels per tile
+};
+const CG = {};             // carnival geometries (A.car holds the materials)
+
+// ---------- generation (deterministic from the room code) ----------
+function carGen(R) {
+  const W = CAR.W, H = CAR.H; GW = W; GH = H;
+  for (let n = 0; n < 40; n++) { const w = carTry(R, W, H, 6); if (w) return w; }      // normally succeeds first time; a layout needs at least 6 reachable tents
+  for (let n = 0; n < 200; n++) { const w = carTry(R, W, H, 1); if (w) return w; }
+  throw new Error('carnival: could not generate a layout');
+}
+function carTry(R, W, H, minTents) {
+  const g = new Uint8Array(W * H).fill(1);          // 0 open · 1 solid
+  const tt = new Uint8Array(W * H);                 // 0 lane · 1 ticket gate · 2 tent · 5 midway · 6 exit hall
+  const kd = new Uint8Array(W * H);                 // what a solid tile is: 0 wall · 1 tent pole · 2 stall
+  const rg = new Uint8Array(W * H);                 // 1 = the canvas wall of a tent / hall (drawn striped), the rest is painted funhouse board
+  const I = (x, y) => y * W + x, carve = (x, y) => { g[I(x, y)] = 0; };
+  const cy = ((H - 1) >> 1) | 1;                    // odd, so it lines up with the maze lanes
+  const FX0 = 1, FY0 = cy - 3, FW = 7;
+  const rects = [];
+  const fits = (x0, y0, w, h) => {
+    if (x0 < 13 || y0 < 1 || x0 + w - 1 > W - 2 || y0 + h - 1 > H - 2) return false;
+    for (const r of rects) if (x0 < r.x0 + r.w + 2 && x0 + w + 2 > r.x0 && y0 < r.y0 + r.h + 2 && y0 + h + 2 > r.y0) return false;
+    return true;
+  };
+  // the way out: a hall at the far east end
+  const ex0 = W - 10, ey0 = 1 + 2 * Math.floor(R() * ((H - 10 - 1) / 2 + 1));
+  rects.push({ x0: ex0, y0: ey0, w: 9, h: 9, type: 6 });
+  // the midway, then the tents
+  const rnd = (w, h) => { const nx = Math.floor((W - 1 - w - 13) / 2) + 1, ny = Math.floor((H - 1 - h - 1) / 2) + 1; return [13 + 2 * Math.floor(R() * nx), 1 + 2 * Math.floor(R() * ny)]; };
+  for (let k = 0; k < 80; k++) { const [x0, y0] = rnd(11, 9); if (fits(x0, y0, 11, 9)) { rects.push({ x0, y0, w: 11, h: 9, type: 5 }); break; } }
+  const sizes = [5, 7, 7];
+  for (let n = 0; n < CAR.tents; n++) {
+    const w = sizes[(R() * sizes.length) | 0], h = sizes[(R() * sizes.length) | 0];
+    for (let k = 0; k < 60; k++) { const [x0, y0] = rnd(w, h); if (fits(x0, y0, w, h)) { rects.push({ x0, y0, w, h, type: 2 }); break; } }
+  }
+  const inRect = (x, y) => rects.some(r => x >= r.x0 && x < r.x0 + r.w && y >= r.y0 && y < r.y0 + r.h);
+  // the ticket gate (where you arrive) on the west edge, with a short passage out of it
+  for (let y = FY0; y < FY0 + FW; y++)for (let x = FX0; x < FX0 + FW; x++) { carve(x, y); tt[I(x, y)] = 1; }
+  for (let x = FX0 + FW; x <= 10; x++)carve(x, cy);
+  // the funhouse lanes: a winding maze that goes round the rooms
+  const X0 = 11, vis = new Set([I(X0, cy)]), st = [[X0, cy]]; carve(X0, cy);
+  while (st.length) {
+    const [cx, cyy] = st[st.length - 1], nb = [];
+    for (const [dx, dy] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) { const nx = cx + dx, ny = cyy + dy; if (nx >= X0 && nx <= W - 2 && ny >= 1 && ny <= H - 2 && !vis.has(I(nx, ny)) && !inRect(nx, ny)) nb.push([nx, ny, dx, dy]); }
+    if (!nb.length) { st.pop(); continue; }
+    const [nx, ny, dx, dy] = nb[(R() * nb.length) | 0];
+    carve(cx + dx / 2, cyy + dy / 2); carve(nx, ny); vis.add(I(nx, ny)); st.push([nx, ny]);
+  }
+  for (let y = 1; y < H - 1; y++)for (let x = X0 + 1; x < W - 1; x++) {
+    if (g[I(x, y)] !== 1 || R() >= CAR.loops) continue;
+    if (x % 2 === 0 && y % 2 === 1) { if (g[I(x - 1, y)] === 0 && g[I(x + 1, y)] === 0) carve(x, y); }
+    else if (x % 2 === 1 && y % 2 === 0) { if (g[I(x, y - 1)] === 0 && g[I(x, y + 1)] === 0) carve(x, y); }
+  }
+  // where a room can be entered: a wall tile in its rim with an open lane tile right outside it. (rx, rz) points from the doorway into the room.
+  const cands = (r) => {
+    const c = [], ok = (ox, oy) => ox >= 1 && oy >= 1 && ox <= W - 2 && oy <= H - 2 && g[I(ox, oy)] === 0 && !inRect(ox, oy);
+    for (let y = r.y0; y < r.y0 + r.h; y++)if (y % 2 === 1) {
+      if (ok(r.x0 - 2, y) && g[I(r.x0 - 1, y)] === 1) c.push({ tx: r.x0 - 1, ty: y, rx: 1, rz: 0, s: 0 });
+      if (ok(r.x0 + r.w + 1, y) && g[I(r.x0 + r.w, y)] === 1) c.push({ tx: r.x0 + r.w, ty: y, rx: -1, rz: 0, s: 1 });
+    }
+    for (let x = r.x0; x < r.x0 + r.w; x++)if (x % 2 === 1) {
+      if (ok(x, r.y0 - 2) && g[I(x, r.y0 - 1)] === 1) c.push({ tx: x, ty: r.y0 - 1, rx: 0, rz: 1, s: 2 });
+      if (ok(x, r.y0 + r.h + 1) && g[I(x, r.y0 + r.h)] === 1) c.push({ tx: x, ty: r.y0 + r.h, rx: 0, rz: -1, s: 3 });
+    }
+    return c;
+  };
+  const pickC = (c) => c[(R() * c.length) | 0];
+  const kept = [], doors = [], items = [];
+  for (const r of rects) {
+    const c = cands(r); if (!c.length) { if (r.type === 6) return null; continue; }
+    if (r.type === 2) { const d = pickC(c); r.door = d; kept.push(r); }
+    else if (r.type === 5) { r.open = [0, 1, 2, 3].map(s => { const q = c.filter(e => e.s === s); return q.length ? pickC(q) : null; }).filter(Boolean); kept.push(r); }
+    else { const w = c.filter(e => e.s === 0); r.open = [pickC(w.length ? w : c)]; kept.push(r); }
+  }
+  if (kept.filter(r => r.type === 2).length < minTents) return null;
+  // carve the rooms, their rims and furniture
+  const kinds = Object.keys(ITEM.types), tot = kinds.reduce((a, k) => a + ITEM.types[k].w, 0);
+  for (const r of kept) {
+    for (let y = r.y0 - 1; y <= r.y0 + r.h; y++)for (let x = r.x0 - 1; x <= r.x0 + r.w; x++) rg[I(x, y)] = 1;
+    for (let y = r.y0; y < r.y0 + r.h; y++)for (let x = r.x0; x < r.x0 + r.w; x++) { carve(x, y); tt[I(x, y)] = r.type; rg[I(x, y)] = 0; }
+    const free = [];
+    if (r.type === 2) {
+      const d = r.door; carve(d.tx, d.ty); doors.push({ tx: d.tx, ty: d.ty, rx: d.rx, rz: d.rz, room: r });
+      if (r.w >= 7 && r.h >= 7) { const x = r.x0 + (r.w >> 1), y = r.y0 + (r.h >> 1); g[I(x, y)] = 1; kd[I(x, y)] = 1; }
+      for (let y = r.y0; y < r.y0 + r.h; y++)for (let x = r.x0; x < r.x0 + r.w; x++) { if (g[I(x, y)] !== 0) continue; if (x === d.tx + d.rx && y === d.ty + d.rz) continue; free.push([x, y]); }
+      let n = 2 + (r.w * r.h >= 35 ? 1 : 0) + (R() < .4 ? 1 : 0); n = Math.min(n, free.length);
+      for (let i = 0; i < n; i++) {
+        const [x, y] = free.splice((R() * free.length) | 0, 1)[0];
+        let roll = R() * tot, t = kinds[0]; for (const k of kinds) { roll -= ITEM.types[k].w; if (roll <= 0) { t = k; break; } }
+        items.push({ id: items.length, t, tx: x, ty: y, dx: (R() - .5) * 1.4, dz: (R() - .5) * 1.4 });
+      }
+    } else if (r.type === 5) {
+      for (const d of r.open) carve(d.tx, d.ty);
+      for (let oy = 1; oy < r.h - 1; oy += 2)for (let ox = 1; ox < r.w - 1; ox += 2) {
+        const x = r.x0 + ox, y = r.y0 + oy, q = R();
+        if (q < .34) { g[I(x, y)] = 1; kd[I(x, y)] = 2; } else if (q < .52) { g[I(x, y)] = 1; kd[I(x, y)] = 1; }
+      }
+    } else {
+      for (const d of r.open) carve(d.tx, d.ty);
+      for (const [px, py] of [[1, 1], [7, 1], [1, 7], [7, 7]]) { g[I(r.x0 + px, r.y0 + py)] = 1; kd[I(r.x0 + px, r.y0 + py)] = 1; }
+    }
+  }
+  const site = { tx: W - 2, ty: ey0 + 4, x: (W - 1) * T - 1.0, z: (ey0 + 4.5) * T };      // you stand just in front of the exit door
+  const exitDoor = { tx: W - 1, ty: ey0 + 4, rx: -1, rz: 0, exit: true };
+  return {
+    g, tt, kd, rg, rooms: kept, R, doors, exitDoor, walls: [], sites: [site], exit: site, lib: true, car: true, cy, items,
+    spawn: { x0: 2 * T, x1: 5.6 * T, z0: (cy + .6) * T, z1: (cy + 3.4) * T },
+    maxDist: CAR.maxDist, fogD: CAR.fog, fogN: CAR.fogNight, fogColor: CAR.fogColor, hemi: CAR.hemi, mmS: CAR.mm
+  };
+}
+
+// ---------- textures + materials (made the first time you enter) ----------
+function carPaintTent(x, S) {         // red-and-cream striped canvas, stained and torn
+  const n = 8, sw = S / n;
+  for (let i = 0; i < n; i++) { x.fillStyle = i % 2 ? '#c9bd98' : '#8c1f26'; x.fillRect(i * sw, 0, sw + 1, S); }
+  for (let i = 0; i < 300; i++) { x.fillStyle = `rgba(0,0,0,${.02 + TR() * .05})`; x.fillRect(TR() * S, TR() * S, 1 + TR() * 2, 8 + TR() * 30); }
+  x.fillStyle = 'rgba(0,0,0,.25)'; for (let i = 0; i < n; i++) x.fillRect(i * sw - 1, 0, 2, S);
+  const gr = x.createLinearGradient(0, S * .55, 0, S); gr.addColorStop(0, 'rgba(20,12,8,0)'); gr.addColorStop(1, 'rgba(20,12,8,.7)'); x.fillStyle = gr; x.fillRect(0, S * .55, S, S * .45);
+  const tp = x.createLinearGradient(0, 0, 0, S * .25); tp.addColorStop(0, 'rgba(0,0,0,.45)'); tp.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = tp; x.fillRect(0, 0, S, S * .25);
+  for (let i = 0; i < 14; i++)blob(x, S, TR() * S, TR() * S, 18 + TR() * 50, 'rgba(30,20,10,A)', .14 + TR() * .16);
+  for (let i = 0; i < 3; i++) { x.fillStyle = 'rgba(8,5,5,.85)'; x.beginPath(); const px = TR() * S, py = S * (.2 + TR() * .5); x.moveTo(px, py); x.lineTo(px + 4 + TR() * 6, py + 20 + TR() * 50); x.lineTo(px - 3, py + 18 + TR() * 40); x.closePath(); x.fill(); }
+  grain(x, S, S, 14);
+}
+function carPaintFun(x, S) {          // funhouse boards: faded harlequin diamonds over a wooden skirting
+  x.fillStyle = '#24102f'; x.fillRect(0, 0, S, S);
+  const n = 4, d = S / n, band = S * .16;
+  for (let r = 0; r < n; r++)for (let c = 0; c < n; c++) {
+    const cx = c * d + d / 2, cy = r * d + d / 2;
+    x.fillStyle = (r + c) % 2 ? '#6a1b5a' : '#1d5a66'; x.beginPath(); x.moveTo(cx, cy - d / 2); x.lineTo(cx + d / 2, cy); x.lineTo(cx, cy + d / 2); x.lineTo(cx - d / 2, cy); x.closePath(); x.fill();
+    x.strokeStyle = 'rgba(230,190,90,.32)'; x.lineWidth = 3; x.stroke();
+  }
+  x.fillStyle = '#2e1a12'; x.fillRect(0, S - band, S, band); x.fillStyle = '#4a2c1c'; x.fillRect(0, S - band, S, 6);
+  for (let i = 0; i < 4; i++) { x.strokeStyle = 'rgba(0,0,0,.5)'; x.lineWidth = 4; x.strokeRect(i * S / 4 + 10, S - band + 14, S / 4 - 20, band - 24); }
+  const gr = x.createLinearGradient(0, S * .6, 0, S); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,.45)'); x.fillStyle = gr; x.fillRect(0, S * .6, S, S * .4);
+  for (let i = 0; i < 26; i++)blob(x, S, TR() * S, TR() * S, 20 + TR() * 50, 'rgba(0,0,0,A)', .14 + TR() * .16);
+  for (let i = 0; i < 2; i++)crack(x, S, 'rgba(0,0,0,0.4)');
+  grain(x, S, S, 14);
+}
+function carPaintFloor(x, S) {        // trampled boardwalk: dark planks, sawdust and old confetti
+  x.fillStyle = '#0c0807'; x.fillRect(0, 0, S, S);
+  const rows = 8, rh = S / rows;
+  for (let r = 0; r < rows; r++) {
+    let px = -TR() * S * .5;
+    while (px < S) {
+      const w = S * (.3 + TR() * .35);
+      x.fillStyle = `hsl(${20 + TR() * 12},${24 + TR() * 16}%,${11 + TR() * 8}%)`; x.fillRect(px + 2, r * rh + 2, w - 4, rh - 4);
+      for (let k = 0; k < 6; k++) { x.strokeStyle = `rgba(0,0,0,${.08 + TR() * .15})`; x.lineWidth = 1; const y = r * rh + 4 + TR() * (rh - 8); x.beginPath(); x.moveTo(px + 3, y); x.lineTo(px + w - 3, y + (TR() - .5) * 3); x.stroke(); }
+      x.fillStyle = 'rgba(0,0,0,.6)'; x.fillRect(px + 6, r * rh + rh / 2, 3, 3); x.fillRect(px + w - 9, r * rh + rh / 2, 3, 3);
+      px += w;
+    }
+  }
+  for (let i = 0; i < 70; i++) { x.fillStyle = `hsla(${TR() * 360},60%,45%,.4)`; x.fillRect(TR() * S, TR() * S, 3 + TR() * 4, 2 + TR() * 3); }      // confetti
+  for (let i = 0; i < 40; i++)blob(x, S, TR() * S, TR() * S, 14 + TR() * 40, 'rgba(0,0,0,A)', .12 + TR() * .14);
+  for (let i = 0; i < 30; i++)blob(x, S, TR() * S, TR() * S, 8 + TR() * 22, 'rgba(160,130,80,A)', .06);        // sawdust
+  grain(x, S, S, 12);
+}
+function carPaintCeil(x, S) {         // the sagging big-top canvas overhead
+  const n = 4, sw = S / n;
+  for (let i = 0; i < n; i++) { x.fillStyle = i % 2 ? '#271622' : '#180d15'; x.fillRect(i * sw, 0, sw + 1, S); }
+  for (let i = 0; i < 20; i++)blob(x, S, TR() * S, TR() * S, 20 + TR() * 50, 'rgba(0,0,0,A)', .25);
+  for (let i = 0; i < 8; i++)blob(x, S, TR() * S, TR() * S, 6 + TR() * 14, 'rgba(70,60,90,A)', .18);
+  grain(x, S, S, 10);
+}
+
+function carAssets(Q) {
+  if (A.car) return;
+  const S = Q.tex, t = {};
+  t.tent = mk(S, S, carPaintTent); t.fun = mk(S, S, carPaintFun); t.floor = mk(S, S, carPaintFloor); t.ceil = mk(S / 2, S / 2, carPaintCeil);
+  t.floor.repeat.set(CAR.W, CAR.H); t.ceil.repeat.set(CAR.W, CAR.H);
+  A.car = { tex: t, tent: LitMat({ map: t.tent }), fun: LitMat({ map: t.fun }), floor: LitMat({ map: t.floor }), ceil: LitMat({ map: t.ceil }), dark: LitMat({ color: 0x3a2a24 }) };
+  const bx = (w, h, d, x, y, z) => new THREE.BoxGeometry(w, h, d).translate(x, y, z);
+  const cyl = (rt, rb, h, seg, y) => new THREE.CylinderGeometry(rt, rb, h, seg).translate(0, y, 0);
+  CG.pole = mergeGeos([cyl(.3, .32, WH, 10, WH / 2), cyl(.5, .5, .25, 10, .125), cyl(.46, .3, .5, 10, WH - .25)]);
+  CG.stall = mergeGeos([bx(2.4, .95, 1.2, 0, .475, 0), bx(.12, 2.5, .12, -1.1, 1.25, -.55), bx(.12, 2.5, .12, 1.1, 1.25, -.55), bx(.12, 2.5, .12, -1.1, 1.25, .55), bx(.12, 2.5, .12, 1.1, 1.25, .55), bx(2.4, .08, .08, 0, 2.45, -.55)]);
+  CG.awn = new THREE.BoxGeometry(2.9, .07, 1.9).rotateX(.22).translate(0, 2.55, .25);
+  doorAssets(Q);
+}
+
+// ---------- the ticket gate: where you wake up ----------
+function carGate(root, world, glowL) {
+  const cy = world.cy, wood = A.wood;
+  const box = (w, h, d, x, y, z, m, ry = 0) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.rotation.y = ry; root.add(b); return b; };
+  const dz = (cy - 3) * T + 1.1, dx0 = 4.5 * T;
+  box(2.2, 1.1, 1.3, dx0, .55, dz, wood); box(2.6, .08, 1.7, dx0, 2.5, dz, A.car.tent); box(.1, 2.5, .1, dx0 - 1.1, 1.25, dz - .6, wood); box(.1, 2.5, .1, dx0 + 1.1, 1.25, dz - .6, wood);       // ticket booth
+  box(.9, .9, .9, 2 * T, .45, (cy + 2.6) * T, wood, .2); box(.7, .7, .7, 2 * T + .1, 1.25, (cy + 2.6) * T, wood, .8); box(.8, .8, .8, 6.2 * T, .4, (cy + 3) * T, wood, .5);          // crates
+  const lx = dx0, lz = dz + .1;
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(.09, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffd890 })); bulb.position.set(lx, 2.3, lz); root.add(bulb);
+  glowL.push([lx, 2.3, lz, 1, .8, .5]);
+  LIGHTS.push({ id: 'lamp', x: lx, y: 2.2, z: lz + .2, col: 0xffc880, int: 2.9, d: 24, fl: .14, ph: 1.7, w: 3 });
+  const c = document.createElement('canvas'); c.width = 512; c.height = 96; const x = c.getContext('2d');
+  x.font = '600 54px Cinzel, Georgia, serif'; x.textAlign = 'center'; x.fillStyle = 'rgba(255,196,120,0.95)'; x.shadowColor = '#ff5a8a'; x.shadowBlur = 14; x.fillText('CARNIVAL', 256, 64);
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false })); sign.scale.set(2.8, .52, 1); sign.position.set(8 * T - .12, 3.0, (cy + .5) * T); root.add(sign);
+}
+
+// ---------- build ----------
+function carBuild(world, Q) {
+  const { g, tt, kd, rg, rooms } = world, R = world.R, W = GW, H = GH, cyF = world.cy;
+  const root = new THREE.Group(); scene.add(root); world.root = root;
+  const I = (x, y) => y * W + x, TC = (t) => (t + .5) * T;
+  carAssets(Q);
+  const L = {}; for (const k of ['wallT', 'wallF', 'pole', 'stall', 'awn', 'lantB', 'lantC', 'part', 'trim', 'leaf', 'hw']) L[k] = new IL();
+  const glowL = [], glowS = [], dust = [];
+  const cnt = (x) => Math.floor(x * Q.dens + R());
+  const jit = (l, h, s) => { const v = l + R() * (h - l); return new THREE.Color(v, v * (1 + (R() - .5) * s), v * (1 - (R() - .5) * s)); };
+  const BULBS = [0xff6a9a, 0xffb45a, 0x5affd0, 0xff4a4a, 0xffd860, 0xb08aff];
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const isOpen = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 0;
+  const isWall = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 1 && kd[I(x, y)] === 0;
+  for (let ty = 0; ty < H; ty++)for (let tx = 0; tx < W; tx++) {
+    const v = g[I(tx, ty)], k = kd[I(tx, ty)], cx = TC(tx), cz = TC(ty), tp = tt[I(tx, ty)];
+    if (v === 1 && k === 0) {          // a wall: only if someone could see it
+      if (world.exitDoor && tx === world.exitDoor.tx && ty === world.exitDoor.ty) continue;
+      let ex = false;
+      for (let a = -1; a <= 1 && !ex; a++)for (let b = -1; b <= 1; b++) if (isOpen(tx + a, ty + b)) { ex = true; break; }
+      if (!ex) continue;
+      (rg[I(tx, ty)] ? L.wallT : L.wallF).add(cx, WH / 2, cz, 0, 1, 1, 1, jit(.75, 1, .05));
+      continue;
+    }
+    if (v === 1 && k === 1) L.pole.add(cx, 0, cz, R() * 6.28, 1, 1, 1, jit(.8, 1, .04));
+    if (v === 1 && k === 2) {          // a stall with a striped awning
+      const ry = Math.floor(R() * 4) * Math.PI / 2, tint = jit(.75, 1, .06);
+      L.stall.add(cx, 0, cz, ry, 1, 1, 1, tint); L.awn.add(cx, 0, cz, ry, 1, 1, 1, tint);
+      LIGHTS.push({ x: cx, y: 2.2, z: cz, col: BULBS[(R() * BULBS.length) | 0], int: 1.5, d: 9, fl: .3, ph: R() * 10, w: 1.2 });
+    }
+    if (v === 1) continue;
+    const inRoom = tp === 2 || tp === 5 || tp === 6;
+    for (let n = cnt(inRoom ? .9 : .3); n > 0; n--)dust.push(cx + (R() - .5) * T, .5 + R() * 3, cz + (R() - .5) * T);
+    for (const [dx, dy] of DIRS) {
+      if (!isWall(tx + dx, ty + dy)) continue;
+      const th = Math.atan2(-dx, -dy), bx = cx + dx * (T / 2 - .03), bz = cz + dy * (T / 2 - .03);
+      if (tp !== 1 && R() < .012) glowS.push([bx - dx * .12, 1 + R() * 2.4, bz - dy * .12, 1, .6, .8]);
+      const lr = tp === 1 ? 0 : inRoom ? .07 : .045;
+      if (R() < lr) {      // a string-light bulb on the wall
+        const colr = BULBS[(R() * BULBS.length) | 0], cc = new THREE.Color(colr);
+        const lx = bx - dx * .14, lz = bz - dy * .14, ly = 2.2 + R() * .35;
+        L.lantB.add(lx, ly, lz, th); L.lantC.add(lx, ly, lz, th, 1, 1, 1, cc); glowL.push([lx, ly, lz, cc.r, cc.g, cc.b]);
+        LIGHTS.push({ x: lx, y: ly, z: lz, col: colr, int: 2.0, d: 11, fl: .25, ph: R() * 10, w: 1 });
+      }
+    }
+  }
+  // doors: a canvas partition, casing, a hinged leaf and brass hardware in every tent doorway (and the way out)
+  for (const d of [...world.doors, world.exitDoor]) {
+    const o = d.exit ? { hs: -1, sw: 1, al: 1.0 } : { hs: R() < .5 ? -1 : 1, sw: 1, al: 0 };
+    o.tint = jit(.8, 1, .05); o.tint2 = jit(.8, 1, .06); o.leafTint = jit(.78, 1, .14);
+    const D0 = doorAdd(L, d.tx, d.ty, d.rx, d.rz, o);
+    if (d.exit) { d.cx = D0.cx; d.cz = D0.cz; d.th = D0.th; continue; }
+    doorWalls(world.walls, D0); doorDyn(world, D0);
+    for (const side of [-1, 1]) {            // a bulb beside the door: -1 on the lane face, +1 on the tent face
+      if (R() > (side < 0 ? .5 : .15)) continue;
+      const lat = (R() < .5 ? -1 : 1) * 1.18, [lx, lz] = D0.loc(lat, side * (DOOR.TH / 2 + .14)), ly = 2.3 + R() * .2, th2 = side < 0 ? Math.atan2(-d.rx, -d.rz) : Math.atan2(d.rx, d.rz);
+      const colr = BULBS[(R() * BULBS.length) | 0], cc = new THREE.Color(colr);
+      L.lantB.add(lx, ly, lz, th2); L.lantC.add(lx, ly, lz, th2, 1, 1, 1, cc); glowL.push([lx, ly, lz, cc.r, cc.g, cc.b]);
+      LIGHTS.push({ x: lx, y: ly, z: lz, col: colr, int: 2.0, d: 11, fl: .25, ph: R() * 10, w: 1 });
+    }
+  }
+  // lights over the midway and a cold light over the way out
+  for (const r of rooms) {
+    const mx = TC(r.x0 + (r.w - 1) / 2), mz = TC(r.y0 + (r.h - 1) / 2);
+    if (r.type === 5) for (const off of [-3, 0, 3]) LIGHTS.push({ x: mx + off * T, y: 3.0, z: mz, col: 0xffa86a, int: 2.6, d: 19, fl: .2, ph: R() * 10, w: 2 });
+    if (r.type === 6) LIGHTS.push({ x: mx, y: 3.4, z: mz, col: 0x7dffc8, int: 1.4, d: 22, fl: 0, ph: 0, w: 1.3 });
+    if (r.type === 2) LIGHTS.push({ x: mx, y: 2.9, z: mz, col: 0xffc08a, int: 1.8, d: 11, fl: .22, ph: R() * 10, w: 1.4 });
+  }
+  const mk2 = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
+  mk2('wallT', G.wall, A.car.tent); mk2('wallF', G.wall, A.car.fun);
+  mk2('pole', CG.pole, A.car.tent); mk2('stall', CG.stall, A.wood); mk2('awn', CG.awn, A.car.tent);
+  mk2('lantB', G.lantB, A.lantB); mk2('lantC', G.lantC, A.lantC);
+  { const dm = A.door; mk2('part', dm.g.part, A.car.tent); mk2('trim', dm.g.trim, dm.mat.trim); mk2('leaf', dm.g.leaf, dm.mat.door); mk2('hw', dm.g.hw, dm.mat.brass); }
+  // one floor and one ceiling for the whole level
+  const fl = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(-Math.PI / 2), A.car.floor); fl.position.set(W * T / 2, 0, H * T / 2); root.add(fl);
+  const ce = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(Math.PI / 2), A.car.ceil); ce.position.set(W * T / 2, WH, H * T / 2); root.add(ce);
+  fl.matrixAutoUpdate = ce.matrixAutoUpdate = false; fl.updateMatrix(); ce.updateMatrix();
+  carGate(root, world, glowL);
+  buildGates(root, world);
+  itemsBuild(root, world);
+  world.scares = findScareSpots(world);
+  if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
+  if (glowL.length) root.add(glowPoints(glowL, Q.glow * 1.8, A.tex.glow));
+  if (dust.length) { const dp = libDust(dust, R); root.add(dp); world.fireMat = dp.material; }
+  return world;
+}
+
+// ---------- level switch: through the library's way out ----------
+async function carEnter() {
+  if (lvBusy || LV !== 1 || !world || !started) return; lvBusy = true;
+  P.freeze = true; keys.clear(); joy.x = joy.y = 0; touchSprint = false; Torch.shaking = false;
+  Aud.shift(); libFade(true, 'LEVEL 3', 'The Abandoned Carnival');
+  await wait(1100);
+  libTeardown(); LV = 2;
+  const w = carGen(mulberry32(hashStr(code + '|carnival')));
+  world = carBuild(w, Q);
+  explored = new Uint8Array(GW * GH);
+  const mm = $('#mm'); mm.width = GW * w.mmS; mm.height = GH * w.mmS;
+  libEnv(w);
+  itemsReset();
+  const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = -Math.PI / 2; P.pitch = 0; P.flickT = .5;
+  if (Mim.st !== 'idle') mimicEnd(); Mim.t = Math.max(Mim.t, 75);
+  if (Scare.act) endScare(); Scare.quiet = 35;
+  applyRes(); startT = tNow; await frame();
+  net.set({ lv: 2, x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, e: 0 });
+  await wait(500); libFade(false); toast('Level 3 — the Abandoned Carnival. Search the tents, find the way out.');
+  P.freeze = false; lvBusy = false;
+}
+  </script>
+</body>
+
+</html>

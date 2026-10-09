@@ -3,326 +3,354 @@
 
 <head>
   <meta charset="utf-8">
-  <title>Hollow Identity - the Abandoned Carnival</title>
+  <title>Hollow Identity - maps</title>
 </head>
 
 <body>
-  <!-- ALL ABOUT LEVEL 3, THE ABANDONED CARNIVAL: the generator, the builder, its textures and the level switch (carEnter).
-       index.html loads this file at start-up and runs the script below as part of the game. You get here through the library's way out.
-       It is the same size as the library, twice the garden (59 x 43 tiles vs 41 x 31): a funhouse-style maze of painted boards, a midway with stalls,
-       and sealed striped tents. Every tent is a real closed room with exactly ONE door (the working door from library.html) and pickups inside (items.html).
-       Everyone in a room gets the same carnival (seeded from the room code). -->
+  <!-- ALL ABOUT MAPS: world size constants, maze generation (same map for everyone from the room code), world/start-room/gate/sky building, and the minimap.
+       index.html loads this file at start-up and runs the script below as part of the game. -->
   <script>
 'use strict';
-// ---------- tuning ----------
-const CAR = {
-  W: 59, H: 43,            // 2x the garden (41 x 31), same as the library. Keep both odd.
-  tents: 11,               // sealed tents / backstage rooms, each with one door and items inside
-  loops: .12,              // chance a wall between two lanes is knocked through (higher = fewer dead ends)
-  maxDist: 38,             // nothing further than this is drawn (fog anyway)
-  fog: .056, fogNight: .036, fogColor: 0x0a0610, hemi: .30,
-  mm: 4                    // minimap pixels per tile
-};
-const CG = {};             // carnival geometries (A.car holds the materials)
+// ---- world constants
+const T = 3.2, WH = 4.4;
+let GW = 41, GH = 31, SKYOBJ = [];     // GW/GH change per level (the library is bigger); SKYOBJ = stars + moon, hidden indoors
+// ---- the way out hops between gate sites. Tune these:
+const EXIT_SITES = 4;        // how many places the gate can appear
+const EXIT_SHIFT_S = 150;    // the open gate moves to a new site every this many seconds
+const EXIT_WARN_S = 15;      // the gate starts flickering this many seconds before it moves
 
-// ---------- generation (deterministic from the room code) ----------
-function carGen(R) {
-  const W = CAR.W, H = CAR.H; GW = W; GH = H;
-  for (let n = 0; n < 40; n++) { const w = carTry(R, W, H, 6); if (w) return w; }      // normally succeeds first time; a layout needs at least 6 reachable tents
-  for (let n = 0; n < 200; n++) { const w = carTry(R, W, H, 1); if (w) return w; }
-  throw new Error('carnival: could not generate a layout');
-}
-function carTry(R, W, H, minTents) {
-  const g = new Uint8Array(W * H).fill(1);          // 0 open · 1 solid
-  const tt = new Uint8Array(W * H);                 // 0 lane · 1 ticket gate · 2 tent · 5 midway · 6 exit hall
-  const kd = new Uint8Array(W * H);                 // what a solid tile is: 0 wall · 1 tent pole · 2 stall
-  const rg = new Uint8Array(W * H);                 // 1 = the canvas wall of a tent / hall (drawn striped), the rest is painted funhouse board
-  const I = (x, y) => y * W + x, carve = (x, y) => { g[I(x, y)] = 0; };
-  const cy = ((H - 1) >> 1) | 1;                    // odd, so it lines up with the maze lanes
-  const FX0 = 1, FY0 = cy - 3, FW = 7;
-  const rects = [];
-  const fits = (x0, y0, w, h) => {
-    if (x0 < 13 || y0 < 1 || x0 + w - 1 > W - 2 || y0 + h - 1 > H - 2) return false;
-    for (const r of rects) if (x0 < r.x0 + r.w + 2 && x0 + w + 2 > r.x0 && y0 < r.y0 + r.h + 2 && y0 + h + 2 > r.y0) return false;
-    return true;
-  };
-  // the way out: a hall at the far east end
-  const ex0 = W - 10, ey0 = 1 + 2 * Math.floor(R() * ((H - 10 - 1) / 2 + 1));
-  rects.push({ x0: ex0, y0: ey0, w: 9, h: 9, type: 6 });
-  // the midway, then the tents
-  const rnd = (w, h) => { const nx = Math.floor((W - 1 - w - 13) / 2) + 1, ny = Math.floor((H - 1 - h - 1) / 2) + 1; return [13 + 2 * Math.floor(R() * nx), 1 + 2 * Math.floor(R() * ny)]; };
-  for (let k = 0; k < 80; k++) { const [x0, y0] = rnd(11, 9); if (fits(x0, y0, 11, 9)) { rects.push({ x0, y0, w: 11, h: 9, type: 5 }); break; } }
-  const sizes = [5, 7, 7];
-  for (let n = 0; n < CAR.tents; n++) {
-    const w = sizes[(R() * sizes.length) | 0], h = sizes[(R() * sizes.length) | 0];
-    for (let k = 0; k < 60; k++) { const [x0, y0] = rnd(w, h); if (fits(x0, y0, w, h)) { rects.push({ x0, y0, w, h, type: 2 }); break; } }
-  }
-  const inRect = (x, y) => rects.some(r => x >= r.x0 && x < r.x0 + r.w && y >= r.y0 && y < r.y0 + r.h);
-  // the ticket gate (where you arrive) on the west edge, with a short passage out of it
-  for (let y = FY0; y < FY0 + FW; y++)for (let x = FX0; x < FX0 + FW; x++) { carve(x, y); tt[I(x, y)] = 1; }
-  for (let x = FX0 + FW; x <= 10; x++)carve(x, cy);
-  // the funhouse lanes: a winding maze that goes round the rooms
-  const X0 = 11, vis = new Set([I(X0, cy)]), st = [[X0, cy]]; carve(X0, cy);
+// ---------- maze generation (deterministic from the room code) ----------
+function genWorld(R) {
+  const g = new Uint8Array(GW * GH).fill(1);         // 0 open · 1 wall · 2 hedge · 3 tree
+  const tt = new Uint8Array(GW * GH);                // 0 corridor · 1 start room · 2 grove · 3 garden · 4 exit
+  const I = (x, y) => y * GW + x, carve = (x, y) => { g[I(x, y)] = 0; };
+  for (let y = 13; y <= 17; y++)for (let x = 1; x <= 5; x++) { carve(x, y); tt[I(x, y)] = 1; }
+  for (let x = 6; x <= 8; x++)carve(x, 15);
+  const X0 = 9, vis = new Set([I(9, 15)]), st = [[9, 15]]; carve(9, 15);
   while (st.length) {
-    const [cx, cyy] = st[st.length - 1], nb = [];
-    for (const [dx, dy] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) { const nx = cx + dx, ny = cyy + dy; if (nx >= X0 && nx <= W - 2 && ny >= 1 && ny <= H - 2 && !vis.has(I(nx, ny)) && !inRect(nx, ny)) nb.push([nx, ny, dx, dy]); }
+    const [cx, cy] = st[st.length - 1], nb = [];
+    for (const [dx, dy] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) { const nx = cx + dx, ny = cy + dy; if (nx >= X0 && nx <= GW - 2 && ny >= 1 && ny <= GH - 2 && !vis.has(I(nx, ny))) nb.push([nx, ny, dx, dy]); }
     if (!nb.length) { st.pop(); continue; }
     const [nx, ny, dx, dy] = nb[(R() * nb.length) | 0];
-    carve(cx + dx / 2, cyy + dy / 2); carve(nx, ny); vis.add(I(nx, ny)); st.push([nx, ny]);
+    carve(cx + dx / 2, cy + dy / 2); carve(nx, ny); vis.add(I(nx, ny)); st.push([nx, ny]);
   }
-  for (let y = 1; y < H - 1; y++)for (let x = X0 + 1; x < W - 1; x++) {
-    if (g[I(x, y)] !== 1 || R() >= CAR.loops) continue;
+  for (let y = 1; y < GH - 1; y++)for (let x = X0 + 1; x < GW - 1; x++) {
+    if (g[I(x, y)] !== 1 || R() >= .13) continue;
     if (x % 2 === 0 && y % 2 === 1) { if (g[I(x - 1, y)] === 0 && g[I(x + 1, y)] === 0) carve(x, y); }
     else if (x % 2 === 1 && y % 2 === 0) { if (g[I(x, y - 1)] === 0 && g[I(x, y + 1)] === 0) carve(x, y); }
   }
-  // where a room can be entered: a wall tile in its rim with an open lane tile right outside it. (rx, rz) points from the doorway into the room.
-  const cands = (r) => {
-    const c = [], ok = (ox, oy) => ox >= 1 && oy >= 1 && ox <= W - 2 && oy <= H - 2 && g[I(ox, oy)] === 0 && !inRect(ox, oy);
-    for (let y = r.y0; y < r.y0 + r.h; y++)if (y % 2 === 1) {
-      if (ok(r.x0 - 2, y) && g[I(r.x0 - 1, y)] === 1) c.push({ tx: r.x0 - 1, ty: y, rx: 1, rz: 0, s: 0 });
-      if (ok(r.x0 + r.w + 1, y) && g[I(r.x0 + r.w, y)] === 1) c.push({ tx: r.x0 + r.w, ty: y, rx: -1, rz: 0, s: 1 });
-    }
-    for (let x = r.x0; x < r.x0 + r.w; x++)if (x % 2 === 1) {
-      if (ok(x, r.y0 - 2) && g[I(x, r.y0 - 1)] === 1) c.push({ tx: x, ty: r.y0 - 1, rx: 0, rz: 1, s: 2 });
-      if (ok(x, r.y0 + r.h + 1) && g[I(x, r.y0 + r.h)] === 1) c.push({ tx: x, ty: r.y0 + r.h, rx: 0, rz: -1, s: 3 });
-    }
-    return c;
-  };
-  const pickC = (c) => c[(R() * c.length) | 0];
-  const kept = [], doors = [], items = [];
-  for (const r of rects) {
-    const c = cands(r); if (!c.length) { if (r.type === 6) return null; continue; }
-    if (r.type === 2) { const d = pickC(c); r.door = d; kept.push(r); }
-    else if (r.type === 5) { r.open = [0, 1, 2, 3].map(s => { const q = c.filter(e => e.s === s); return q.length ? pickC(q) : null; }).filter(Boolean); kept.push(r); }
-    else { const w = c.filter(e => e.s === 0); r.open = [pickC(w.length ? w : c)]; kept.push(r); }
-  }
-  if (kept.filter(r => r.type === 2).length < minTents) return null;
-  // carve the rooms, their rims and furniture
-  const kinds = Object.keys(ITEM.types), tot = kinds.reduce((a, k) => a + ITEM.types[k].w, 0);
-  for (const r of kept) {
-    for (let y = r.y0 - 1; y <= r.y0 + r.h; y++)for (let x = r.x0 - 1; x <= r.x0 + r.w; x++) rg[I(x, y)] = 1;
-    for (let y = r.y0; y < r.y0 + r.h; y++)for (let x = r.x0; x < r.x0 + r.w; x++) { carve(x, y); tt[I(x, y)] = r.type; rg[I(x, y)] = 0; }
-    const free = [];
-    if (r.type === 2) {
-      const d = r.door; carve(d.tx, d.ty); doors.push({ tx: d.tx, ty: d.ty, rx: d.rx, rz: d.rz, room: r });
-      if (r.w >= 7 && r.h >= 7) { const x = r.x0 + (r.w >> 1), y = r.y0 + (r.h >> 1); g[I(x, y)] = 1; kd[I(x, y)] = 1; }
-      for (let y = r.y0; y < r.y0 + r.h; y++)for (let x = r.x0; x < r.x0 + r.w; x++) { if (g[I(x, y)] !== 0) continue; if (x === d.tx + d.rx && y === d.ty + d.rz) continue; free.push([x, y]); }
-      let n = 2 + (r.w * r.h >= 35 ? 1 : 0) + (R() < .4 ? 1 : 0); n = Math.min(n, free.length);
-      for (let i = 0; i < n; i++) {
-        const [x, y] = free.splice((R() * free.length) | 0, 1)[0];
-        let roll = R() * tot, t = kinds[0]; for (const k of kinds) { roll -= ITEM.types[k].w; if (roll <= 0) { t = k; break; } }
-        items.push({ id: items.length, t, tx: x, ty: y, dx: (R() - .5) * 1.4, dz: (R() - .5) * 1.4 });
+  const rooms = [];
+  const place = (x0, y0, w, h, type) => {
+    rooms.push({ x0, y0, w, h, type });
+    for (let y = y0; y < y0 + h; y++)for (let x = x0; x < x0 + w; x++) { carve(x, y); tt[I(x, y)] = type; }
+    const cxo = x0 + (w - 1) / 2, cyo = y0 + (h - 1) / 2;
+    if (type === 3 || type === 2) {
+      for (let oy = 1; oy < h - 1; oy += 2)for (let ox = 1; ox < w - 1; ox += 2) {
+        const x = x0 + ox, y = y0 + oy;
+        if (type === 3 && x === cxo && y === cyo) continue;
+        if (R() < (type === 3 ? .55 : .5)) g[I(x, y)] = (type === 3 ? 2 : 1);
       }
-    } else if (r.type === 5) {
-      for (const d of r.open) carve(d.tx, d.ty);
-      for (let oy = 1; oy < r.h - 1; oy += 2)for (let ox = 1; ox < r.w - 1; ox += 2) {
-        const x = r.x0 + ox, y = r.y0 + oy, q = R();
-        if (q < .34) { g[I(x, y)] = 1; kd[I(x, y)] = 2; } else if (q < .52) { g[I(x, y)] = 1; kd[I(x, y)] = 1; }
-      }
-    } else {
-      for (const d of r.open) carve(d.tx, d.ty);
-      for (const [px, py] of [[1, 1], [7, 1], [1, 7], [7, 7]]) { g[I(r.x0 + px, r.y0 + py)] = 1; kd[I(r.x0 + px, r.y0 + py)] = 1; }
+      if (type === 3) { const mx = Math.round(cxo), my = Math.round(cyo); g[I(mx, my)] = 3; }
     }
-  }
-  const site = { tx: W - 2, ty: ey0 + 4, x: (W - 1) * T - 1.0, z: (ey0 + 4.5) * T };      // you stand just in front of the exit door
-  const exitDoor = { tx: W - 1, ty: ey0 + 4, rx: -1, rz: 0, exit: true };
-  return {
-    g, tt, kd, rg, rooms: kept, R, doors, exitDoor, walls: [], sites: [site], exit: site, lib: true, car: true, cy, items,
-    spawn: { x0: 2 * T, x1: 5.6 * T, z0: (cy + .6) * T, z1: (cy + 3.4) * T },
-    maxDist: CAR.maxDist, fogD: CAR.fog, fogN: CAR.fogNight, fogColor: CAR.fogColor, hemi: CAR.hemi, mmS: CAR.mm
   };
-}
-
-// ---------- textures + materials (made the first time you enter) ----------
-function carPaintTent(x, S) {         // red-and-cream striped canvas, stained and torn
-  const n = 8, sw = S / n;
-  for (let i = 0; i < n; i++) { x.fillStyle = i % 2 ? '#c9bd98' : '#8c1f26'; x.fillRect(i * sw, 0, sw + 1, S); }
-  for (let i = 0; i < 300; i++) { x.fillStyle = `rgba(0,0,0,${.02 + TR() * .05})`; x.fillRect(TR() * S, TR() * S, 1 + TR() * 2, 8 + TR() * 30); }
-  x.fillStyle = 'rgba(0,0,0,.25)'; for (let i = 0; i < n; i++) x.fillRect(i * sw - 1, 0, 2, S);
-  const gr = x.createLinearGradient(0, S * .55, 0, S); gr.addColorStop(0, 'rgba(20,12,8,0)'); gr.addColorStop(1, 'rgba(20,12,8,.7)'); x.fillStyle = gr; x.fillRect(0, S * .55, S, S * .45);
-  const tp = x.createLinearGradient(0, 0, 0, S * .25); tp.addColorStop(0, 'rgba(0,0,0,.45)'); tp.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = tp; x.fillRect(0, 0, S, S * .25);
-  for (let i = 0; i < 14; i++)blob(x, S, TR() * S, TR() * S, 18 + TR() * 50, 'rgba(30,20,10,A)', .14 + TR() * .16);
-  for (let i = 0; i < 3; i++) { x.fillStyle = 'rgba(8,5,5,.85)'; x.beginPath(); const px = TR() * S, py = S * (.2 + TR() * .5); x.moveTo(px, py); x.lineTo(px + 4 + TR() * 6, py + 20 + TR() * 50); x.lineTo(px - 3, py + 18 + TR() * 40); x.closePath(); x.fill(); }
-  grain(x, S, S, 14);
-}
-function carPaintFun(x, S) {          // funhouse boards: faded harlequin diamonds over a wooden skirting
-  x.fillStyle = '#24102f'; x.fillRect(0, 0, S, S);
-  const n = 4, d = S / n, band = S * .16;
-  for (let r = 0; r < n; r++)for (let c = 0; c < n; c++) {
-    const cx = c * d + d / 2, cy = r * d + d / 2;
-    x.fillStyle = (r + c) % 2 ? '#6a1b5a' : '#1d5a66'; x.beginPath(); x.moveTo(cx, cy - d / 2); x.lineTo(cx + d / 2, cy); x.lineTo(cx, cy + d / 2); x.lineTo(cx - d / 2, cy); x.closePath(); x.fill();
-    x.strokeStyle = 'rgba(230,190,90,.32)'; x.lineWidth = 3; x.stroke();
+  // the way out can be in several places ("sites"); only one gate is open at a time (see exitIdxAt / updateGates)
+  const sites = [], farC = [], anyC = [];
+  for (let ex = 13; ex <= 35; ex += 2)for (let ey = 1; ey <= 25; ey += 2) { anyC.push([ex, ey]); if (ex >= 23) farC.push([ex, ey]); }
+  for (let n = 0, sep = 13; n < EXIT_SITES; n++) {
+    const src = n === 0 ? farC : anyC; let got = null;
+    for (let k = 0; k < 400 && !got; k++) {
+      const c = src[(R() * src.length) | 0];
+      if (sites.every(q => Math.hypot(q.tx - c[0], q.ty - c[1]) >= sep)) got = c;
+      else if (k % 100 === 99 && sep > 7) sep -= 2;     // cramped? relax the spacing a little
+    }
+    if (!got) break;
+    place(got[0], got[1], 5, 5, 4);                     // a moonlit gate garden
+    sites.push({ tx: got[0], ty: got[1], x: (got[0] + 2.5) * T, z: (got[1] + 2.5) * T });
   }
-  x.fillStyle = '#2e1a12'; x.fillRect(0, S - band, S, band); x.fillStyle = '#4a2c1c'; x.fillRect(0, S - band, S, 6);
-  for (let i = 0; i < 4; i++) { x.strokeStyle = 'rgba(0,0,0,.5)'; x.lineWidth = 4; x.strokeRect(i * S / 4 + 10, S - band + 14, S / 4 - 20, band - 24); }
-  const gr = x.createLinearGradient(0, S * .6, 0, S); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,.45)'); x.fillStyle = gr; x.fillRect(0, S * .6, S, S * .4);
-  for (let i = 0; i < 26; i++)blob(x, S, TR() * S, TR() * S, 20 + TR() * 50, 'rgba(0,0,0,A)', .14 + TR() * .16);
-  for (let i = 0; i < 2; i++)crack(x, S, 'rgba(0,0,0,0.4)');
-  grain(x, S, S, 14);
-}
-function carPaintFloor(x, S) {        // trampled boardwalk: dark planks, sawdust and old confetti
-  x.fillStyle = '#0c0807'; x.fillRect(0, 0, S, S);
-  const rows = 8, rh = S / rows;
-  for (let r = 0; r < rows; r++) {
-    let px = -TR() * S * .5;
-    while (px < S) {
-      const w = S * (.3 + TR() * .35);
-      x.fillStyle = `hsl(${20 + TR() * 12},${24 + TR() * 16}%,${11 + TR() * 8}%)`; x.fillRect(px + 2, r * rh + 2, w - 4, rh - 4);
-      for (let k = 0; k < 6; k++) { x.strokeStyle = `rgba(0,0,0,${.08 + TR() * .15})`; x.lineWidth = 1; const y = r * rh + 4 + TR() * (rh - 8); x.beginPath(); x.moveTo(px + 3, y); x.lineTo(px + w - 3, y + (TR() - .5) * 3); x.stroke(); }
-      x.fillStyle = 'rgba(0,0,0,.6)'; x.fillRect(px + 6, r * rh + rh / 2, 3, 3); x.fillRect(px + w - 9, r * rh + rh / 2, 3, 3);
-      px += w;
+  const sizes = [5, 5, 7, 5, 7];
+  for (let n = 0; n < 9; n++) {
+    const w = pick(sizes, R), h = pick(sizes, R);
+    for (let k = 0; k < 60; k++) {
+      const nx = Math.floor((GW - 1 - w - X0) / 2) + 1, ny = Math.floor((GH - 1 - h - 1) / 2) + 1;
+      const x0 = X0 + 2 * Math.floor(R() * nx), y0 = 1 + 2 * Math.floor(R() * ny);
+      let ok = x0 + w - 1 <= GW - 2 && y0 + h - 1 <= GH - 2;
+      for (const r of rooms) { if (x0 < r.x0 + r.w + 2 && x0 + w + 2 > r.x0 && y0 < r.y0 + r.h + 2 && y0 + h + 2 > r.y0) { ok = false; break; } }
+      if (ok) { place(x0, y0, w, h, R() < .45 ? 3 : 2); break; }
     }
   }
-  for (let i = 0; i < 70; i++) { x.fillStyle = `hsla(${TR() * 360},60%,45%,.4)`; x.fillRect(TR() * S, TR() * S, 3 + TR() * 4, 2 + TR() * 3); }      // confetti
-  for (let i = 0; i < 40; i++)blob(x, S, TR() * S, TR() * S, 14 + TR() * 40, 'rgba(0,0,0,A)', .12 + TR() * .14);
-  for (let i = 0; i < 30; i++)blob(x, S, TR() * S, TR() * S, 8 + TR() * 22, 'rgba(160,130,80,A)', .06);        // sawdust
-  grain(x, S, S, 12);
-}
-function carPaintCeil(x, S) {         // the sagging big-top canvas overhead
-  const n = 4, sw = S / n;
-  for (let i = 0; i < n; i++) { x.fillStyle = i % 2 ? '#271622' : '#180d15'; x.fillRect(i * sw, 0, sw + 1, S); }
-  for (let i = 0; i < 20; i++)blob(x, S, TR() * S, TR() * S, 20 + TR() * 50, 'rgba(0,0,0,A)', .25);
-  for (let i = 0; i < 8; i++)blob(x, S, TR() * S, TR() * S, 6 + TR() * 14, 'rgba(70,60,90,A)', .18);
-  grain(x, S, S, 10);
+  return { g, tt, rooms, R, sites, exit: sites[0] };
 }
 
-function carAssets(Q) {
-  if (A.car) return;
-  const S = Q.tex, t = {};
-  t.tent = mk(S, S, carPaintTent); t.fun = mk(S, S, carPaintFun); t.floor = mk(S, S, carPaintFloor); t.ceil = mk(S / 2, S / 2, carPaintCeil);
-  t.floor.repeat.set(CAR.W, CAR.H); t.ceil.repeat.set(CAR.W, CAR.H);
-  A.car = { tex: t, tent: LitMat({ map: t.tent }), fun: LitMat({ map: t.fun }), floor: LitMat({ map: t.floor }), ceil: LitMat({ map: t.ceil }), dark: LitMat({ color: 0x3a2a24 }) };
-  const bx = (w, h, d, x, y, z) => new THREE.BoxGeometry(w, h, d).translate(x, y, z);
-  const cyl = (rt, rb, h, seg, y) => new THREE.CylinderGeometry(rt, rb, h, seg).translate(0, y, 0);
-  CG.pole = mergeGeos([cyl(.3, .32, WH, 10, WH / 2), cyl(.5, .5, .25, 10, .125), cyl(.46, .3, .5, 10, WH - .25)]);
-  CG.stall = mergeGeos([bx(2.4, .95, 1.2, 0, .475, 0), bx(.12, 2.5, .12, -1.1, 1.25, -.55), bx(.12, 2.5, .12, 1.1, 1.25, -.55), bx(.12, 2.5, .12, -1.1, 1.25, .55), bx(.12, 2.5, .12, 1.1, 1.25, .55), bx(2.4, .08, .08, 0, 2.45, -.55)]);
-  CG.awn = new THREE.BoxGeometry(2.9, .07, 1.9).rotateX(.22).translate(0, 2.55, .25);
-  doorAssets(Q);
+function glowPoints(list, size, tex) {
+  const pos = new Float32Array(list.length * 3), col = new Float32Array(list.length * 3);
+  list.forEach((e, i) => { pos[i * 3] = e[0]; pos[i * 3 + 1] = e[1]; pos[i * 3 + 2] = e[2]; col[i * 3] = e[3]; col[i * 3 + 1] = e[4]; col[i * 3 + 2] = e[5]; });
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const m = new THREE.Points(geo, new THREE.PointsMaterial({ size, map: tex, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true }));
+  m.frustumCulled = false; return m;
 }
+const fireMat = () => new THREE.ShaderMaterial({
+  uniforms: { uTime, uTex: { value: A.tex.glow }, uPS: { value: 600 } },
+  vertexShader: `attribute float aPh;uniform float uTime;uniform float uPS;varying float vA;
+  void main(){vec3 p=position;p.x+=sin(uTime*.6+aPh*6.)*.9;p.y+=sin(uTime*.9+aPh*9.)*.35;p.z+=cos(uTime*.5+aPh*5.)*.9;
+  vec4 mv=modelViewMatrix*vec4(p,1.);gl_Position=projectionMatrix*mv;float d=-mv.z;
+  vA=smoothstep(34.,10.,d)*(.45+.55*sin(uTime*(1.5+aPh*2.)+aPh*20.));gl_PointSize=uPS/max(d,.5);}`,
+  fragmentShader: `uniform sampler2D uTex;varying float vA;void main(){vec4 t=texture2D(uTex,gl_PointCoord);gl_FragColor=vec4(vec3(.85,1.,.45)*t.rgb,t.a*vA);}`,
+  transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+});
 
-// ---------- the ticket gate: where you wake up ----------
-function carGate(root, world, glowL) {
-  const cy = world.cy, wood = A.wood;
-  const box = (w, h, d, x, y, z, m, ry = 0) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.rotation.y = ry; root.add(b); return b; };
-  const dz = (cy - 3) * T + 1.1, dx0 = 4.5 * T;
-  box(2.2, 1.1, 1.3, dx0, .55, dz, wood); box(2.6, .08, 1.7, dx0, 2.5, dz, A.car.tent); box(.1, 2.5, .1, dx0 - 1.1, 1.25, dz - .6, wood); box(.1, 2.5, .1, dx0 + 1.1, 1.25, dz - .6, wood);       // ticket booth
-  box(.9, .9, .9, 2 * T, .45, (cy + 2.6) * T, wood, .2); box(.7, .7, .7, 2 * T + .1, 1.25, (cy + 2.6) * T, wood, .8); box(.8, .8, .8, 6.2 * T, .4, (cy + 3) * T, wood, .5);          // crates
-  const lx = dx0, lz = dz + .1;
-  const bulb = new THREE.Mesh(new THREE.SphereGeometry(.09, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffd890 })); bulb.position.set(lx, 2.3, lz); root.add(bulb);
-  glowL.push([lx, 2.3, lz, 1, .8, .5]);
-  LIGHTS.push({ id: 'lamp', x: lx, y: 2.2, z: lz + .2, col: 0xffc880, int: 2.9, d: 24, fl: .14, ph: 1.7, w: 3 });
-  const c = document.createElement('canvas'); c.width = 512; c.height = 96; const x = c.getContext('2d');
-  x.font = '600 54px Cinzel, Georgia, serif'; x.textAlign = 'center'; x.fillStyle = 'rgba(255,196,120,0.95)'; x.shadowColor = '#ff5a8a'; x.shadowBlur = 14; x.fillText('CARNIVAL', 256, 64);
-  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false })); sign.scale.set(2.8, .52, 1); sign.position.set(8 * T - .12, 3.0, (cy + .5) * T); root.add(sign);
-}
-
-// ---------- build ----------
-function carBuild(world, Q) {
-  const { g, tt, kd, rg, rooms } = world, R = world.R, W = GW, H = GH, cyF = world.cy;
+// ---------- build everything ----------
+function buildWorld(world, Q) {
+  const { g, tt, rooms } = world, R = world.R;
   const root = new THREE.Group(); scene.add(root); world.root = root;
-  const I = (x, y) => y * W + x, TC = (t) => (t + .5) * T;
-  carAssets(Q);
-  const L = {}; for (const k of ['wallT', 'wallF', 'pole', 'stall', 'awn', 'lantB', 'lantC', 'part', 'trim', 'leaf', 'hw']) L[k] = new IL();
-  const glowL = [], glowS = [], dust = [];
+  const I = (x, y) => y * GW + x, TC = (t) => (t + .5) * T;
+  const L = {}; for (const k of ['wall', 'hedge', 'fStone', 'fGrass', 'fMoss', 'ceil', 'ivy', 'vine', 'tuft', 'fern', 'leafy', 'bush', 'stem', 'bloom', 'mcap', 'mstem', 'trunk', 'canopy', 'lantB', 'lantC']) L[k] = new IL();
+  const glowS = [], glowL = [], fire = [];
   const cnt = (x) => Math.floor(x * Q.dens + R());
   const jit = (l, h, s) => { const v = l + R() * (h - l); return new THREE.Color(v, v * (1 + (R() - .5) * s), v * (1 - (R() - .5) * s)); };
-  const BULBS = [0xff6a9a, 0xffb45a, 0x5affd0, 0xff4a4a, 0xffd860, 0xb08aff];
+  const hsl = (h0, h1, s, l0, l1) => new THREE.Color().setHSL(h0 + R() * (h1 - h0), s, l0 + R() * (l1 - l0));
+  const FL = [0xff4fa0, 0x5ef2ff, 0xffd75a, 0xc58bff, 0xffffff, 0x7dffb0], MU = [0x44ffd5, 0xb06bff, 0xff6fb0, 0xffb040];
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  const isOpen = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 0;
-  const isWall = (x, y) => x >= 0 && y >= 0 && x < W && y < H && g[I(x, y)] === 1 && kd[I(x, y)] === 0;
-  for (let ty = 0; ty < H; ty++)for (let tx = 0; tx < W; tx++) {
-    const v = g[I(tx, ty)], k = kd[I(tx, ty)], cx = TC(tx), cz = TC(ty), tp = tt[I(tx, ty)];
-    if (v === 1 && k === 0) {          // a wall: only if someone could see it
-      if (world.exitDoor && tx === world.exitDoor.tx && ty === world.exitDoor.ty) continue;
+  const rot90 = () => Math.floor(R() * 4) * Math.PI / 2;
+  for (let ty = 0; ty < GH; ty++)for (let tx = 0; tx < GW; tx++) {
+    const v = g[I(tx, ty)], cx = TC(tx), cz = TC(ty);
+    if (v === 1) {
       let ex = false;
-      for (let a = -1; a <= 1 && !ex; a++)for (let b = -1; b <= 1; b++) if (isOpen(tx + a, ty + b)) { ex = true; break; }
-      if (!ex) continue;
-      (rg[I(tx, ty)] ? L.wallT : L.wallF).add(cx, WH / 2, cz, 0, 1, 1, 1, jit(.75, 1, .05));
+      for (let a = -1; a <= 1 && !ex; a++)for (let b = -1; b <= 1; b++) { const nx = tx + a, ny = ty + b; if (nx >= 0 && ny >= 0 && nx < GW && ny < GH && g[I(nx, ny)] !== 1) { ex = true; break; } }
+      if (ex) L.wall.add(cx, WH / 2, cz, 0, 1, 1, 1, jit(.72, 1, .06));
       continue;
     }
-    if (v === 1 && k === 1) L.pole.add(cx, 0, cz, R() * 6.28, 1, 1, 1, jit(.8, 1, .04));
-    if (v === 1 && k === 2) {          // a stall with a striped awning
-      const ry = Math.floor(R() * 4) * Math.PI / 2, tint = jit(.75, 1, .06);
-      L.stall.add(cx, 0, cz, ry, 1, 1, 1, tint); L.awn.add(cx, 0, cz, ry, 1, 1, 1, tint);
-      LIGHTS.push({ x: cx, y: 2.2, z: cz, col: BULBS[(R() * BULBS.length) | 0], int: 1.5, d: 9, fl: .3, ph: R() * 10, w: 1.2 });
+    const tp = tt[I(tx, ty)], outdoor = (tp === 3 || tp === 4);
+    (outdoor ? L.fGrass : tp === 2 ? L.fMoss : L.fStone).add(cx, 0, cz, rot90(), 1, 1, 1, jit(.75, 1, .05));
+    if (v === 0 && !outdoor) L.ceil.add(cx, WH, cz, rot90(), 1, 1, 1, jit(.6, .9, .04));
+    if (v === 2) {
+      L.hedge.add(cx, .85, cz, 0, 1, 1, 1, jit(.7, 1, .1));
+      for (let k = 0; k < 5; k++)L.leafy.add(cx + (R() - .5) * T * .8, 1.55, cz + (R() - .5) * T * .8, R() * 6.28, 1.2, 1, 1.2, hsl(.25, .33, .5, .35, .6));
+      continue;
     }
-    if (v === 1) continue;
-    const inRoom = tp === 2 || tp === 5 || tp === 6;
-    for (let n = cnt(inRoom ? .9 : .3); n > 0; n--)dust.push(cx + (R() - .5) * T, .5 + R() * 3, cz + (R() - .5) * T);
+    if (v === 3) {
+      L.trunk.add(cx, 0, cz, R() * 6.28, 1, 1, 1, null, (R() - .5) * .1, (R() - .5) * .1);
+      for (let k = 0; k < 7; k++) { const a = k / 7 * 6.28 + R(), r = .6 + R() * 1.6, s = 1.3 + R() * 1.1; L.canopy.add(cx + Math.cos(a) * r, 5 + R() * 2.4, cz + Math.sin(a) * r, R() * 6, s, s * .75, s, hsl(.38, .38, .46, .22, .4)); }
+      L.canopy.add(cx, 6.6, cz, 0, 2.2, 1.5, 2.2, hsl(.38, .38, .46, .22, .4));
+      for (let k = 0, n = Math.floor(8 * Q.dens); k < n; k++) { const a = R() * 6.28, r = .5 + R() * 2; L.vine.add(cx + Math.cos(a) * r, 5.2 + R(), cz + Math.sin(a) * r, R() * 6.28, 1, 1.2 + R() * .8, 1, hsl(.25, .35, .5, .35, .7)); }
+      for (let k = 0; k < 10; k++) { const a = R() * 6.28, r = .5 + R() * 2.2; glowS.push([cx + Math.cos(a) * r, 4.4 + R() * 2.6, cz + Math.sin(a) * r, 1, .85, .4]); }
+      continue;
+    }
+    const D = outdoor ? { gr: 14, fe: 2.6, fl: .55, mu: .12, fi: 5, bu: .18 } : tp === 2 ? { gr: 8, fe: 2.4, fl: .4, mu: .55, fi: 3, bu: .35 } : tp === 1 ? { gr: .3, fe: .12, fl: 0, mu: 0, fi: 0, bu: 0 } : { gr: 1.4, fe: .5, fl: .08, mu: .14, fi: .5, bu: .05 };
+    const rp = () => [cx + (R() - .5) * (T - .3), cz + (R() - .5) * (T - .3)];
+    for (let k = cnt(D.gr); k > 0; k--) { const [x, z] = rp(), s = .8 + R() * .9; L.tuft.add(x, 0, z, R() * 6.28, s, s * (.8 + R() * .8), s, hsl(.2, .33, .5, .4, .7)); }
+    for (let k = cnt(D.fe); k > 0; k--) { const [x, z] = rp(), s = .8 + R() * .9; L.fern.add(x, 0, z, R() * 6.28, s, s * (.8 + R() * .5), s, hsl(.24, .34, .5, .35, .7)); }
+    for (let k = cnt(D.bu); k > 0; k--) { const [x, z] = rp(), s = .5 + R() * .6; L.bush.add(x, .3 * s, z, R() * 6.28, s, s * .7, s, hsl(.27, .36, .4, .1, .22)); }
+    for (let k = cnt(D.fl); k > 0; k--) {
+      const c = FL[(R() * FL.length) | 0], cc = new THREE.Color(c), n = 1 + ((R() * 3) | 0), [x0, z0] = rp();
+      for (let j = 0; j < n; j++) { const x = x0 + (R() - .5) * .5, z = z0 + (R() - .5) * .5, h = .3 + R() * .6; L.stem.add(x, 0, z, 0, 1, h, 1); L.bloom.add(x, h, z, 0, 1, 1, 1, cc); glowS.push([x, h, z, cc.r, cc.g, cc.b]); }
+    }
+    for (let k = cnt(D.mu); k > 0; k--) {
+      const c = MU[(R() * MU.length) | 0], cc = new THREE.Color(c), m = 2 + ((R() * 4) | 0), [x0, z0] = rp();
+      for (let j = 0; j < m; j++) {
+        const x = x0 + (R() - .5) * .4, z = z0 + (R() - .5) * .4, h = .1 + R() * .25, r = .06 + R() * .1;
+        L.mstem.add(x, 0, z, 0, r * .5, h, r * .5); L.mcap.add(x, h, z, 0, r * 1.6, r, r * 1.6, cc); glowS.push([x, h + .06, z, cc.r * .8, cc.g * .8, cc.b * .8]);
+      }
+      if (R() < .22) LIGHTS.push({ x: x0, y: .5, z: z0, col: c, int: 1.0, d: 6.5, fl: .25, ph: R() * 10, w: 1 });
+    }
+    for (let k = cnt(D.fi); k > 0; k--)fire.push(cx + (R() - .5) * T, .5 + R() * 2.6, cz + (R() - .5) * T);
+    // walls around this tile
     for (const [dx, dy] of DIRS) {
-      if (!isWall(tx + dx, ty + dy)) continue;
-      const th = Math.atan2(-dx, -dy), bx = cx + dx * (T / 2 - .03), bz = cz + dy * (T / 2 - .03);
-      if (tp !== 1 && R() < .012) glowS.push([bx - dx * .12, 1 + R() * 2.4, bz - dy * .12, 1, .6, .8]);
-      const lr = tp === 1 ? 0 : inRoom ? .07 : .045;
-      if (R() < lr) {      // a string-light bulb on the wall
-        const colr = BULBS[(R() * BULBS.length) | 0], cc = new THREE.Color(colr);
-        const lx = bx - dx * .14, lz = bz - dy * .14, ly = 2.2 + R() * .35;
+      if (g[I(tx + dx, ty + dy)] !== 1) continue;
+      const th = Math.atan2(-dx, -dy), tX = Math.cos(th), tZ = -Math.sin(th), bx = cx + dx * (T / 2 - .03), bz = cz + dy * (T / 2 - .03);
+      const ivyN = tp === 2 ? 2.2 : outdoor ? 1.6 : tp === 1 ? .25 : .65, vineN = tp === 2 ? 3 : outdoor ? 2.2 : tp === 1 ? .4 : 1;
+      for (let k = cnt(ivyN); k > 0; k--) {
+        const u = (R() - .5) * (T - .5), y = .5 + R() * 3.4, s = 1.7 + R() * 1.5, o = .02 + R() * .06;
+        L.ivy.add(bx + tX * u - dx * o, y, bz + tZ * u - dy * o, th, s, s, s, hsl(.25, .36, .5, .5, .9), -.1 + (R() - .5) * .2, (R() - .5) * .8);
+      }
+      for (let k = cnt(vineN); k > 0; k--) {
+        const u = (R() - .5) * (T - .4), o = .05 + R() * .08;
+        L.vine.add(bx + tX * u - dx * o, WH - R() * .4, bz + tZ * u - dy * o, th, .9 + R() * .5, .7 + R() * 1.1, 1, hsl(.25, .35, .5, .4, .8));
+      }
+      const lr = tp === 1 ? 0 : (tp === 2 || outdoor) ? .06 : .035;
+      if (R() < lr) {
+        const rr = R(), col = rr < .78 ? 0xffb45a : rr < .92 ? 0x6fe6cf : 0xff7a5a, cc = new THREE.Color(col);
+        const lx = bx - dx * .14, lz = bz - dy * .14, ly = 2.25 + R() * .3;
         L.lantB.add(lx, ly, lz, th); L.lantC.add(lx, ly, lz, th, 1, 1, 1, cc); glowL.push([lx, ly, lz, cc.r, cc.g, cc.b]);
-        LIGHTS.push({ x: lx, y: ly, z: lz, col: colr, int: 2.0, d: 11, fl: .25, ph: R() * 10, w: 1 });
+        LIGHTS.push({ x: lx, y: ly, z: lz, col, int: 2.1, d: 11, fl: .18, ph: R() * 10, w: 1 });
       }
     }
-  }
-  // doors: a canvas partition, casing, a hinged leaf and brass hardware in every tent doorway (and the way out)
-  for (const d of [...world.doors, world.exitDoor]) {
-    const o = d.exit ? { hs: -1, sw: 1, al: 1.0 } : { hs: R() < .5 ? -1 : 1, sw: 1, al: 0 };
-    o.tint = jit(.8, 1, .05); o.tint2 = jit(.8, 1, .06); o.leafTint = jit(.78, 1, .14);
-    const D0 = doorAdd(L, d.tx, d.ty, d.rx, d.rz, o);
-    if (d.exit) { d.cx = D0.cx; d.cz = D0.cz; d.th = D0.th; continue; }
-    doorWalls(world.walls, D0); doorDyn(world, D0);
-    for (const side of [-1, 1]) {            // a bulb beside the door: -1 on the lane face, +1 on the tent face
-      if (R() > (side < 0 ? .5 : .15)) continue;
-      const lat = (R() < .5 ? -1 : 1) * 1.18, [lx, lz] = D0.loc(lat, side * (DOOR.TH / 2 + .14)), ly = 2.3 + R() * .2, th2 = side < 0 ? Math.atan2(-d.rx, -d.rz) : Math.atan2(d.rx, d.rz);
-      const colr = BULBS[(R() * BULBS.length) | 0], cc = new THREE.Color(colr);
-      L.lantB.add(lx, ly, lz, th2); L.lantC.add(lx, ly, lz, th2, 1, 1, 1, cc); glowL.push([lx, ly, lz, cc.r, cc.g, cc.b]);
-      LIGHTS.push({ x: lx, y: ly, z: lz, col: colr, int: 2.0, d: 11, fl: .25, ph: R() * 10, w: 1 });
+    // hanging vines from the ceiling
+    if (v === 0 && !outdoor) {
+      for (let k = cnt(tp === 2 ? 3.2 : tp === 1 ? .2 : .7); k > 0; k--)L.vine.add(cx + (R() - .5) * (T - .4), WH - .05, cz + (R() - .5) * (T - .4), R() * 6.28, 1, .8 + R() * 1.1, 1, hsl(.25, .35, .5, .4, .8));
     }
   }
-  // lights over the midway and a cold light over the way out
+  // garden & exit moonlight
   for (const r of rooms) {
-    const mx = TC(r.x0 + (r.w - 1) / 2), mz = TC(r.y0 + (r.h - 1) / 2);
-    if (r.type === 5) for (const off of [-3, 0, 3]) LIGHTS.push({ x: mx + off * T, y: 3.0, z: mz, col: 0xffa86a, int: 2.6, d: 19, fl: .2, ph: R() * 10, w: 2 });
-    if (r.type === 6) LIGHTS.push({ x: mx, y: 3.4, z: mz, col: 0x7dffc8, int: 1.4, d: 22, fl: 0, ph: 0, w: 1.3 });
-    if (r.type === 2) LIGHTS.push({ x: mx, y: 2.9, z: mz, col: 0xffc08a, int: 1.8, d: 11, fl: .22, ph: R() * 10, w: 1.4 });
+    if (r.type !== 3 && r.type !== 4) continue;
+    const cx = (r.x0 + r.w / 2) * T, cz = (r.y0 + r.h / 2) * T;
+    LIGHTS.push({ x: cx, y: 6.5, z: cz, col: r.type === 4 ? 0x7dffc8 : 0x7da4ff, int: 1.55, d: r.w > 5 || r.h > 5 ? 25 : 21, fl: 0, ph: 0, w: 1.3 });
   }
-  const mk2 = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
-  mk2('wallT', G.wall, A.car.tent); mk2('wallF', G.wall, A.car.fun);
-  mk2('pole', CG.pole, A.car.tent); mk2('stall', CG.stall, A.wood); mk2('awn', CG.awn, A.car.tent);
-  mk2('lantB', G.lantB, A.lantB); mk2('lantC', G.lantC, A.lantC);
-  { const dm = A.door; mk2('part', dm.g.part, A.car.tent); mk2('trim', dm.g.trim, dm.mat.trim); mk2('leaf', dm.g.leaf, dm.mat.door); mk2('hw', dm.g.hw, dm.mat.brass); }
-  // one floor and one ceiling for the whole level
-  const fl = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(-Math.PI / 2), A.car.floor); fl.position.set(W * T / 2, 0, H * T / 2); root.add(fl);
-  const ce = new THREE.Mesh(new THREE.PlaneGeometry(W * T, H * T).rotateX(Math.PI / 2), A.car.ceil); ce.position.set(W * T / 2, WH, H * T / 2); root.add(ce);
-  fl.matrixAutoUpdate = ce.matrixAutoUpdate = false; fl.updateMatrix(); ce.updateMatrix();
-  carGate(root, world, glowL);
+  const mkI = (k, geo, mat) => { L[k].cat = k; return L[k].build(geo, mat, root); };
+  mkI('wall', G.wall, A.wall); mkI('hedge', G.hedge, A.hedge); mkI('fStone', G.floor, A.floorStone); mkI('fGrass', G.floor, A.floorGrass); mkI('fMoss', G.floor, A.floorMoss); mkI('ceil', G.ceil, A.ceil);
+  mkI('ivy', G.quad, A.ivy); mkI('vine', G.vine, A.vine); mkI('tuft', G.tuft, A.tuft); mkI('fern', G.fern, A.fern); mkI('leafy', G.leafy, A.leafy);
+  mkI('bush', G.bush, A.bush); mkI('stem', G.stem, A.stem); mkI('bloom', G.bloom, A.flower); mkI('mcap', G.mcap, A.mcap); mkI('mstem', G.mstem, A.mstem);
+  mkI('trunk', G.trunk, A.trunk); mkI('canopy', G.canopy, A.canopy); mkI('lantB', G.lantB, A.lantB); mkI('lantC', G.lantC, A.lantC);
+
+  // ---- special places: start room + exit gate
+  world.walls = [];
+  buildStartRoom(root, glowL, glowS, world);
   buildGates(root, world);
-  itemsBuild(root, world);
   world.scares = findScareSpots(world);
   if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
-  if (glowL.length) root.add(glowPoints(glowL, Q.glow * 1.8, A.tex.glow));
-  if (dust.length) { const dp = libDust(dust, R); root.add(dp); world.fireMat = dp.material; }
+  if (glowL.length) root.add(glowPoints(glowL, Q.glow * 2.2, A.tex.glow));
+  if (fire.length) {
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(fire, 3));
+    const ph = new Float32Array(fire.length / 3); for (let i = 0; i < ph.length; i++)ph[i] = R();
+    geo.setAttribute('aPh', new THREE.BufferAttribute(ph, 1));
+    const fp = new THREE.Points(geo, fireMat()); fp.frustumCulled = false; root.add(fp); world.fireMat = fp.material;
+  }
   return world;
 }
 
-// ---------- level switch: through the library's way out ----------
-async function carEnter() {
-  if (lvBusy || LV !== 1 || !world || !started) return; lvBusy = true;
-  P.freeze = true; keys.clear(); joy.x = joy.y = 0; touchSprint = false; Torch.shaking = false;
-  Aud.shift(); libFade(true, 'LEVEL 3', 'The Abandoned Carnival');
-  await wait(1100);
-  libTeardown(); LV = 2;
-  const w = carGen(mulberry32(hashStr(code + '|carnival')));
-  world = carBuild(w, Q);
-  explored = new Uint8Array(GW * GH);
-  const mm = $('#mm'); mm.width = GW * w.mmS; mm.height = GH * w.mmS;
-  libEnv(w);
-  itemsReset();
-  const sp = startSpot(); P.x = sp.x; P.z = sp.z; P.y = 0; P.vy = 0; P.yaw = -Math.PI / 2; P.pitch = 0; P.flickT = .5;
-  if (Mim.st !== 'idle') mimicEnd(); Mim.t = Math.max(Mim.t, 75);
-  if (Scare.act) endScare(); Scare.quiet = 35;
-  applyRes(); startT = tNow; await frame();
-  net.set({ lv: 2, x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, e: 0 });
-  await wait(500); libFade(false); toast('Level 3 — the Abandoned Carnival. Search the tents, find the way out.');
-  P.freeze = false; lvBusy = false;
+function buildStartRoom(root, glowL, glowS, world) {
+  const std = (c, r = .8) => LitMat({ color: c, roughness: r });
+  const box = (w, h, d, x, y, z, m, ry = 0) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(x, y, z); b.rotation.y = ry; root.add(b); return b; };
+  // corner lamp (NW corner of the starting room)
+  const lx = 1 * T + .75, lz = 13 * T + .75;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(.035, .05, 1.9, 8), std(0x222222, .5)); pole.position.set(lx, .95, lz); root.add(pole);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(.22, .26, .07, 12), std(0x222222, .5)); base.position.set(lx, .035, lz); root.add(base);
+  const shade = new THREE.Mesh(new THREE.ConeGeometry(.3, .28, 14, 1, true), LitMat({ color: 0x6a5a3a, roughness: .7, side: THREE.DoubleSide })); shade.position.set(lx, 2.0, lz); root.add(shade);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(.09, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffe2a8 })); bulb.position.set(lx, 1.9, lz); root.add(bulb);
+  glowL.push([lx, 1.9, lz, 1, .75, .4]);
+  LIGHTS.push({ id: 'lamp', x: lx + .1, y: 1.8, z: lz + .1, col: 0xffbe70, int: 2.9, d: 24, fl: .12, ph: 1.7, w: 3 });
+  // props
+  box(2.4, .08, 1.0, 3.2 * 3.2 + .2, .82, 13.9 * T, A.wood);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(.08, .8, .08, 3.2 * 3.2 + .2 + sx * 1.1, .4, 13.9 * T + sz * .4, A.wood);
+  box(.8, .8, .8, 5.1 * T, .4, 16.5 * T, A.wood, .4); box(.7, .7, .7, 5.1 * T + .2, 1.15, 16.5 * T, A.wood, .9); box(.9, .9, .9, 2 * T, .45, 16.6 * T, A.wood, .2); box(.6, .6, .6, 4.8 * T, .3, 13.3 * T, A.wood, .7);
+  box(1.9, .35, .85, 2.2 * T, .3, 14.4 * T - .1, std(0x3a3328, 1), 0);                                     // cot
+  box(1.5, .1, .7, 2.2 * T - .1, .52, 14.4 * T - .1, std(0x56604a, 1), 0);
+  // the door between the room and the hallway: a real panelled door in a wall of its own (it opens as you walk up to it)
+  doorSingle(root, world, 6, 15, -1, 0, { hs: -1, sw: 1, al: 0 });
+  // lantern right outside the door, so the way is faintly lit
+  const hx = 8 * T + .4, hz = 15.5 * T - T / 2 + .2;
+  box(.2, .34, .2, hx, 2.3, hz, std(0x1a1a18, .5));
+  const hb = new THREE.Mesh(new THREE.BoxGeometry(.12, .22, .12), new THREE.MeshBasicMaterial({ color: 0xffc27a })); hb.position.set(hx, 2.3, hz); root.add(hb);
+  glowL.push([hx, 2.3, hz, 1, .72, .4]);
+  LIGHTS.push({ x: hx, y: 2.2, z: hz + .1, col: 0xffb45a, int: 1.8, d: 10, fl: .2, ph: 3, w: 1.5 });
+}
+
+// ---------- exit schedule: same for everyone in a room (room code + wall clock), so no extra networking ----------
+function exitOrder(code, K, cyc) {
+  const mk = (c) => shuffle([...Array(K).keys()], mulberry32(hashStr(code + '|exit|' + c)));
+  const o = mk(cyc);
+  if (K > 2 && o[0] === mk(cyc - 1)[K - 1]) { const t = o[0]; o[0] = o[1]; o[1] = t; }   // never open the same gate twice in a row
+  return o;
+}
+function exitEpoch() { return Math.floor(Date.now() / (EXIT_SHIFT_S * 1000)); }
+function exitIdxAt(code, K, epoch) { return exitOrder(code, K, Math.floor(epoch / K))[((epoch % K) + K) % K]; }
+
+function buildGates(root, world) {
+  const stone = LitMat({ color: 0x6d7a68, map: A.tex.wall, roughness: .9 });
+  const c = document.createElement('canvas'); c.width = 512; c.height = 96; const x = c.getContext('2d');
+  x.font = '600 54px Cinzel, Georgia, serif'; x.textAlign = 'center'; x.fillStyle = 'rgba(170,255,225,0.95)'; x.shadowColor = '#4dffc0'; x.shadowBlur = 18; x.fillText('THE WAY OUT', 256, 64);
+  const signTex = new THREE.CanvasTexture(c);
+  world.gates = world.sites.map((st, i) => {
+    if (world.lib) return libGate(root, world, st, i, signTex);      // the library's way out is a door, not an arch
+    const gx = st.x, gz = st.z;
+    const grp = new THREE.Group(); grp.position.set(gx, 0, gz); root.add(grp);
+    for (const sd of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(.55, 2.6, .55), stone); p.position.set(0, 1.3, sd * 1.65); grp.add(p); }
+    const arch = new THREE.Mesh(new THREE.TorusGeometry(1.65, .28, 8, 28, Math.PI), stone); arch.rotation.y = Math.PI / 2; arch.position.y = 2.6; grp.add(arch);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uTime, uK: { value: 1 } }, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+      fragmentShader: `varying vec2 vUv;uniform float uTime;uniform float uK;
+      void main(){vec2 p=(vUv-.5)*vec2(1.,1.3);float r=length(p);float a=atan(p.y,p.x);
+      float w=.5+.5*sin(a*5.+uTime*1.4-r*18.);float rings=.5+.5*sin(r*22.-uTime*3.);
+      float mask=smoothstep(.55,.15,r);vec3 c=mix(vec3(.1,.6,.5),vec3(.6,1.,.8),w*rings);
+      gl_FragColor=vec4(c*mask*(.7+.5*w)*uK,mask*.8*uK);}`});
+    const portal = new THREE.Mesh(new THREE.PlaneGeometry(3.3, 4.6), mat); portal.rotation.y = Math.PI / 2; portal.position.y = 2.3; grp.add(portal);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: A.tex.glow, color: 0x66ffc8, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: .9 }));
+    glow.scale.set(2.6, 2.6, 1); glow.position.y = 2.2; grp.add(glow);
+    const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    sign.scale.set(4, .75, 1); sign.position.set(0, 4.2, 0); grp.add(sign);
+    const light = { id: 'gate', x: gx, y: 2.3, z: gz, col: 0x66ffc8, int: 0, base: 2.6, d: 18, fl: .1, ph: 2 + i, w: 3 };
+    LIGHTS.push(light);
+    return { st, grp, portal, mat, glow, sign, light, k: 0 };
+  });
+  world.activeIdx = exitIdxAt(code, world.gates.length, exitEpoch());
+  world.exit = world.sites[world.activeIdx]; world.warned = false;
+  world.gates.forEach((G, i) => { G.k = i === world.activeIdx ? 1 : 0; setGateLook(G, G.k); });
+}
+
+function setGateLook(G, v) {
+  const on = v > .02;
+  G.portal.visible = G.glow.visible = G.sign.visible = on;
+  if (!on) { G.light.int = 0; return; }
+  G.mat.uniforms.uK.value = v; G.portal.scale.setScalar(.35 + .65 * Math.min(1, v));
+  G.glow.material.opacity = .9 * v; G.sign.material.opacity = v; G.light.int = G.light.base * v;
+}
+function gateOpen() { const G = world.gates && world.gates[world.activeIdx]; return !!G && G.k > .6; }
+
+// called every frame: moves the open gate on schedule, flickers it as a warning, fades gates in/out
+function updateGates(dt, t) {
+  const gs = world.gates; if (!gs) return;
+  const per = EXIT_SHIFT_S * 1000, now = Date.now(), want = exitIdxAt(code, gs.length, Math.floor(now / per)), left = (per - (now % per)) / 1000;
+  if (want !== world.activeIdx) {
+    world.activeIdx = want; world.exit = world.sites[want]; world.warned = false;
+    toast('The way out has moved.'); Aud.shift();
+  }
+  const warn = gs.length > 1 && left < EXIT_WARN_S;      // a level with a single fixed gate never flickers
+  if (warn && !world.warned) { world.warned = true; toast('The gate is flickering… it won’t stay here long.'); Aud.rumble(); }
+  for (let i = 0; i < gs.length; i++) {
+    const G = gs[i], on = i === world.activeIdx;
+    G.k = lerp(G.k, on ? 1 : 0, 1 - Math.exp(-(on ? 1.1 : 3) * dt));
+    if (!on && G.k < .02) G.k = 0;
+    const flick = on && warn ? .62 + .38 * Math.sin(t * (9 + (EXIT_WARN_S - left) * 2.2)) * Math.sin(t * 3.1) : 1;
+    setGateLook(G, G.k * flick);
+  }
+}
+
+// ---------- scare spots: bends in the corridors, where you can't see what's waiting until you turn the corner ----------
+function findScareSpots(world) {
+  const { g, tt } = world, I = (x, y) => y * GW + x, out = [];
+  const open = (x, y) => x >= 0 && y >= 0 && x < GW && y < GH && g[I(x, y)] === 0;
+  const run = (x, y, dx, dy) => { let n = 0; while (n < 4 && open(x + dx * (n + 1), y + dy * (n + 1))) n++; return n; };
+  for (let ty = 1; ty < GH - 1; ty++)for (let tx = 11; tx < GW - 1; tx++) {   // tx >= 11: nothing near the start room
+    if (g[I(tx, ty)] !== 0 || tt[I(tx, ty)] !== 0) continue;
+    const arms = [];
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (open(tx + dx, ty + dy)) arms.push({ dx, dy, n: run(tx, ty, dx, dy) });
+    if (arms.length !== 2) continue;
+    const [a, b] = arms; if (a.dx + b.dx === 0 && a.dy + b.dy === 0) continue;      // straight corridor, not a bend
+    if (a.n < 2 || b.n < 2) continue;                                                // needs a couple of tiles of corridor to appear in
+    out.push({ tx, ty, x: (tx + .5) * T, z: (ty + .5) * T, arms, armed: Math.random() < .3, used: false });
+  }
+  return out;
+}
+
+function buildSky() {
+  const n = 1400, p = new Float32Array(n * 3), c = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { const u = Math.random() * 6.283, v = Math.random() * .9 + .1, r = 400, s = Math.sqrt(1 - v * v); p[i * 3] = Math.cos(u) * s * r; p[i * 3 + 1] = v * r; p[i * 3 + 2] = Math.sin(u) * s * r; const b = .4 + Math.random() * .6; c[i * 3] = b; c[i * 3 + 1] = b; c[i * 3 + 2] = b * (.9 + Math.random() * .1); }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(p, 3)); geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  const stars = new THREE.Points(geo, new THREE.PointsMaterial({ size: 1.8, sizeAttenuation: false, vertexColors: true, fog: false, transparent: true, opacity: .9, depthWrite: false }));
+  stars.frustumCulled = false; stars.renderOrder = -2; scene.add(stars);
+  const mc = document.createElement('canvas'); mc.width = mc.height = 256; const x = mc.getContext('2d');
+  const g = x.createRadialGradient(128, 128, 0, 128, 128, 128); g.addColorStop(0, 'rgba(220,235,255,1)'); g.addColorStop(.18, 'rgba(210,228,255,.95)'); g.addColorStop(.22, 'rgba(160,190,255,.35)'); g.addColorStop(1, 'rgba(120,160,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 256, 256);
+  const moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(mc), fog: false, transparent: true, depthWrite: false }));
+  moon.scale.set(90, 90, 1); moon.position.set(-160, 250, -220); moon.renderOrder = -1; scene.add(moon);
+  SKYOBJ = [stars, moon];
+  return stars;
+}
+
+function drawMap() {
+  const c = $('#mm'), x = c.getContext('2d'), s = world.mmS || 5, ax = world.exit; x.fillStyle = '#070b09'; x.fillRect(0, 0, c.width, c.height);
+  for (let ty = 0; ty < GH; ty++)for (let tx = 0; tx < GW; tx++) {
+    if (!explored[ty * GW + tx]) continue; const v = world.g[ty * GW + tx], tp = world.tt[ty * GW + tx];
+    if (world.lib) {      // the library has its own colours
+      const k = world.kd[ty * GW + tx];
+      x.fillStyle = v === 1 ? (k === 0 ? '#2b1d14' : k === 1 ? '#3c3c44' : '#5a4028') : tp === 6 ? ((Math.abs(tx - ax.tx) <= 4 && Math.abs(ty - ax.ty) <= 4) ? '#35d6a0' : '#3a463d') : tp === 5 ? '#6a4a2a' : tp === 2 ? '#5a2a2a' : tp === 1 ? '#4a4435' : '#3a3228';
+      x.fillRect(tx * s, ty * s, s, s); continue;
+    }
+    x.fillStyle = v === 1 ? '#161d18' : v === 2 ? '#1f4a2a' : v === 3 ? '#2d6b3d' : tp === 4 ? ((tx >= ax.tx && tx < ax.tx + 5 && ty >= ax.ty && ty < ax.ty + 5) ? '#35d6a0' : '#2a5a38') : tp === 3 ? '#2a5a38' : tp === 2 ? '#344a2c' : tp === 1 ? '#4a4435' : '#3a463d';
+    x.fillRect(tx * s, ty * s, s, s);
+  }
+  if (explored[Math.floor(world.exit.z / T) * GW + Math.floor(world.exit.x / T)]) { x.fillStyle = '#6dffd0'; x.beginPath(); x.arc(world.exit.x / T * s, world.exit.z / T * s, 3.5, 0, 7); x.fill(); }
+  for (const r of remotes.values()) { x.fillStyle = '#' + new THREE.Color(r.sk.accent).getHexString(); x.beginPath(); x.arc(r.x / T * s, r.z / T * s, 2.6, 0, 7); x.fill(); }
+  x.save(); x.translate(P.x / T * s, P.z / T * s); x.rotate(-P.yaw); x.fillStyle = '#fff'; x.beginPath(); x.moveTo(0, -5); x.lineTo(3.5, 3.5); x.lineTo(-3.5, 3.5); x.closePath(); x.fill(); x.restore();
 }
   </script>
 </body>
