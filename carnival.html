@@ -219,7 +219,6 @@ function carGate(root, world, glowL) {
 // ---------- build ----------
 function carBuild(world, Q) {
   const { g, tt, kd, rg, rooms } = world, R = world.R, W = GW, H = GH, cyF = world.cy;
-  const li0 = LIGHTS.length;                       // every lamp this map adds from here on can be switched off until the fuse box is complete
   const root = new THREE.Group(); scene.add(root); world.root = root;
   const I = (x, y) => y * W + x, TC = (t) => (t + .5) * T;
   carAssets(Q);
@@ -298,10 +297,8 @@ function carBuild(world, Q) {
   buildGates(root, world);
   itemsBuild(root, world);
   world.scares = findScareSpots(world);
-  world.carGlow = [];
-  if (glowS.length) { const gs = glowPoints(glowS, Q.glow * .55, A.tex.glow); root.add(gs); world.carGlow.push(gs); }
-  if (glowL.length) { const gl = glowPoints(glowL, Q.glow * 1.8, A.tex.glow); root.add(gl); world.carGlow.push(gl); }
-  world.carLights = LIGHTS.slice(li0);
+  if (glowS.length) root.add(glowPoints(glowS, Q.glow * .55, A.tex.glow));
+  if (glowL.length) root.add(glowPoints(glowL, Q.glow * 1.8, A.tex.glow));
   if (dust.length) { const dp = libDust(dust, R); root.add(dp); world.fireMat = dp.material; }
   return world;
 }

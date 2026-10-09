@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>Hollow Identity - Fear</title>
+</head>
+
+<body>
+  <!-- FEAR: the "something is watching you, all the time" layer. index.html loads this file at start-up; it hooks updateExtras (extras.html), so it runs every frame.
+       No audio files: everything is synthesised with the Web Audio API.
+       SOUND   a dark drone that never fully stops and swells with your fear · slow detuned music box from somewhere in the dark · whispers around your head
+               (and sometimes a real spoken voice saying your name) · distant screams that cut off mid-breath · wailing · breathing on your neck · knocking · scratching
+               · slamming doors · footsteps that follow you and stop a beat after you do · sudden silence
+       SIGHT   EYES that open in the dark at the edge of your vision and vanish when you look at them · THE STALKER: a pale figure that stands far away, stares, and every
+               time you look at it and look away it is closer. Let it get close enough and it runs. · a vignette that tightens and pulses with your heartbeat
+       FEAR    a 0..1 number (darkness, dread, low health, how deep the level is, how close the Stalker is) drives all of it: the more scared you are, the more happens.
+       The "Jumpscares" setting still switches the events, eyes and Stalker off (the drone stays). Tune everything in the FEAR object right below. -->
+  <script>
+'use strict';
+const FEAR = {
+  vol: 1,                       // overall loudness of this layer (on top of the game's volume slider)
+  music: 1,                     // drone + music box + heartbeat
+  voice: true,                  // let the browser's speech voice whisper (your name, "behind you"). Set false if it sounds silly on your computer
+  firstEvent: [7, 11],          // seconds until the first thing happens
+  gap: [30, 9],                 // seconds between events at fear 0 and at fear 1
+  murmur: [8, 15],              // an always-on quiet whisper somewhere around you, every N seconds
+  eyes: [1, 6],                 // eyes in the dark at fear 0 and at fear 1
+  stalkerFirst: [28, 45],       // seconds until the Stalker first shows up on a level
+  stalkerDist: [24, 19, 14, 10, 7],   // metres from you at stage 0..4 (it is closer every time you look at it)
+  rush: 11,                     // metres per second when it runs
+  base: [.3, .42, .55],         // starting fear on level 1 / 2 / 3
+  lines: ['it knows your name', 'don\u2019t turn around', 'it is right behind you', 'you cannot leave', 'it sees you', 'look at me', 'i am in the walls', 'you are not alone in here',
+    'it follows the light', 'it is learning how you walk', 'it can hear your heart', 'turn the light off', 'it is closer now', 'stop running', 'it likes it when you look away', 'we were here first'],
+  spoken: ['behind you', 'i see you', 'don\u2019t turn around', 'he is here', 'you can\u2019t leave', 'let me in', 'look at me', 'right behind you', 'found you']
+};
+const FS = {
+  c: null, out: null, bus: null, noise: null, d: null, wld: null, fear: .3, on: false, errs: 0, hooked: false, t0: 0,
+  evT: 9, muT: 12, hbT: 1, blk: false, silT: 0, stalk: 0, stalkT: 0, lastStep: 0, trail: 0, trailT: 0, wail: 0,
+  eyes: [], eyeT: 6, eyeTex: null, fig: null, figEye: null, sk: { st: 'wait', t: 30, stage: 0, look: 0, lost: 0, age: 0, whT: 6 },
+  acc: 0, vig: null, fl: null, flA: 0, rushP: null, tension: 0, started: 0, pulse: 0
+};
+const fR = (a, b) => a + Math.random() * (b - a), fPick = (a) => a[(Math.random() * a.length) | 0], fC = (v, a, b) => Math.max(a, Math.min(b, v));
+const fOn = () => typeof CFG === 'undefined' || CFG.scares !== false;
+
+// ---------- audio graph ----------
+function fBuild(ctx) {
+  const c = FS.c = ctx || Aud.ctx; if (!c) return false;
+  const n = c.sampleRate * 3, nb = c.createBuffer(1, n, c.sampleRate), nd = nb.getChannelData(0); let b0 = 0, mx = 0;
+  for (let i = 0; i < n; i++) { const w = Math.random() * 2 - 1; b0 = .97 * b0 + .12 * w; nd[i] = w * .6 + b0 * 3; mx = Math.max(mx, Math.abs(nd[i])); }
+  for (let i = 0; i < n; i++) nd[i] /= mx; FS.noise = nb;
+  const len = (c.sampleRate * 3.4) | 0, ir = c.createBuffer(2, len, c.sampleRate);
+  for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.8); }
+  const conv = c.createConvolver(); conv.buffer = ir;
+  const out = c.createGain(); out.gain.value = 0; const comp = c.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 5; comp.attack.value = .005; comp.release.value = .25;
+  const bus = c.createGain(), wet = c.createGain(); wet.gain.value = .5; const rhp = c.createBiquadFilter(); rhp.type = 'highpass'; rhp.frequency.value = 110;
+  bus.connect(out); bus.connect(wet); wet.connect(conv); conv.connect(rhp); rhp.connect(out); out.connect(comp); comp.connect(c.destination);
+  FS.out = out; FS.bus = bus;
+  // the drone: a minor second and a tritone over a low saw. Never resolves.
+  const mkO = (type, f, det, dest, g) => { const o = c.createOscillator(); o.type = type; o.frequency.value = f; o.detune.value = det; const k = c.createGain(); k.gain.value = g; o.connect(k); k.connect(dest); o.start(); return o; };
+  const padLP = c.createBiquadFilter(); padLP.type = 'lowpass'; padLP.frequency.value = 240; padLP.Q.value = 5; const padG = c.createGain(); padG.gain.value = 0; padLP.connect(padG); padG.connect(bus);
+  mkO('sawtooth', 55, -9, padLP, .3); mkO('sawtooth', 55, 8, padLP, .3); mkO('sawtooth', 58.27, 0, padLP, .22); mkO('triangle', 77.78, 4, padLP, .25); mkO('sine', 110, 0, padLP, .2);
+  const pl = c.createOscillator(); pl.frequency.value = .045; const plg = c.createGain(); plg.gain.value = 130; pl.connect(plg); plg.connect(padLP.frequency); pl.start();
+  const shG = c.createGain(); shG.gain.value = 0; shG.connect(bus); const shT = c.createGain(); shT.gain.value = .5; shT.connect(shG);
+  mkO('sine', 1975, 0, shT, .5); mkO('sine', 2093, 0, shT, .5); mkO('sine', 3136, 6, shT, .25);
+  const sl = c.createOscillator(); sl.frequency.value = 5.3; const slg = c.createGain(); slg.gain.value = .5; sl.connect(slg); slg.connect(shT.gain); sl.start();
+  const subG = c.createGain(); subG.gain.value = 0; subG.connect(bus); mkO('sine', 41, 0, subG, 1);
+  const wn = c.createBufferSource(); wn.buffer = nb; wn.loop = true; const wbp = c.createBiquadFilter(); wbp.type = 'bandpass'; wbp.Q.value = 9; wbp.frequency.value = 420; const wG = c.createGain(); wG.gain.value = 0;
+  wn.connect(wbp); wbp.connect(wG); wG.connect(bus); wn.start(); const wl = c.createOscillator(); wl.frequency.value = .08; const wlg = c.createGain(); wlg.gain.value = 260; wl.connect(wlg); wlg.connect(wbp.frequency); wl.start();
+  FS.d = { padG, shG, subG, wG, padLP };
+  return true;
+}
+function fPan(x, y, z, ref, roll) {
+  const c = FS.c, p = c.createPanner(); p.panningModel = 'HRTF'; p.distanceModel = 'inverse'; p.refDistance = ref || 1.5; p.rolloffFactor = roll == null ? 1 : roll; p.maxDistance = 400;
+  if (p.positionX) { p.positionX.value = x; p.positionY.value = y; p.positionZ.value = z; } else p.setPosition(x, y, z); p.connect(FS.bus); return p;
+}
+function fMove(p, x, y, z, t) { if (p.positionX) { p.positionX.linearRampToValueAtTime(x, t); p.positionY.linearRampToValueAtTime(y, t); p.positionZ.linearRampToValueAtTime(z, t); } else p.setPosition(x, y, z); }
+function fListen() {
+  const l = FS.c.listener, fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw), x = camera.position.x, y = camera.position.y, z = camera.position.z;
+  if (l.positionX) { l.positionX.value = x; l.positionY.value = y; l.positionZ.value = z; l.forwardX.value = fx; l.forwardY.value = 0; l.forwardZ.value = fz; l.upX.value = 0; l.upY.value = 1; l.upZ.value = 0; }
+  else { l.setPosition(x, y, z); l.setOrientation(fx, 0, fz, 0, 1, 0); }
+}
+function fAt(dist, deg, y) {                 // a point `dist` metres from you, `deg` degrees clockwise from where you look (180 = right behind you)
+  const a = deg * Math.PI / 180, fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw), rx = Math.cos(P.yaw), rz = -Math.sin(P.yaw);
+  return { x: P.x + fx * dist * Math.cos(a) + rx * dist * Math.sin(a), y: y == null ? 1.5 : y, z: P.z + fz * dist * Math.cos(a) + rz * dist * Math.sin(a) };
+}
+
+// ---------- voices ----------
+function fWhisper(o) {                       // a breathy, syllabic whisper (filtered noise with moving formants). o: x,y,z, vol, n (syllables), sweep:{x,z}
+  const c = FS.c, t = c.currentTime + .03, n = o.n || (5 + ((Math.random() * 8) | 0)), vol = (o.vol == null ? 1 : o.vol);
+  const src = c.createBufferSource(); src.buffer = FS.noise; src.loop = true;
+  const f1 = c.createBiquadFilter(), f2 = c.createBiquadFilter(), hp = c.createBiquadFilter(), g = c.createGain(), mix = c.createGain();
+  f1.type = f2.type = 'bandpass'; f1.Q.value = 4; f2.Q.value = 6; hp.type = 'highpass'; hp.frequency.value = 320; g.gain.value = 0; mix.gain.value = 1;
+  src.connect(f1); src.connect(f2); f1.connect(mix); f2.connect(mix); mix.connect(hp); hp.connect(g);
+  let tt = t;
+  for (let i = 0; i < n; i++) {
+    const len = fR(.07, .18), sib = Math.random() < .22, F1 = sib ? fR(3200, 4200) : fR(350, 900), F2 = sib ? fR(5200, 6800) : fR(1200, 2900);
+    f1.frequency.linearRampToValueAtTime(F1, tt + .02); f2.frequency.linearRampToValueAtTime(F2, tt + .02);
+    g.gain.linearRampToValueAtTime(.0001, tt); g.gain.linearRampToValueAtTime(vol * 4.5 * fR(.55, 1), tt + len * .3); g.gain.linearRampToValueAtTime(.0001, tt + len);
+    tt += len + fR(.02, .08) + (Math.random() < .25 ? fR(.14, .3) : 0);
+  }
+  src.start(t, Math.random() * 1.5); src.stop(tt + .1);
+  const p = fPan(o.x, o.y == null ? 1.5 : o.y, o.z, 1, 1.4); g.connect(p);
+  if (o.sweep) fMove(p, o.sweep.x, o.y == null ? 1.5 : o.y, o.sweep.z, tt);
+  return tt - t;
+}
+function fScream(o) {                        // a human-ish scream: saw + vibrato through moving formants, with a rasp. o: x,z,y, dur, f0,f1, vol, dist, abrupt, track
+  const c = FS.c, t = c.currentTime + .03, dur = o.dur || 1.4, vol = o.vol == null ? .5 : o.vol, dist = o.dist || 10;
+  const osc = c.createOscillator(); osc.type = 'sawtooth'; const f0 = o.f0 || 640, f1 = o.f1 || 1500;
+  osc.frequency.setValueAtTime(f0, t); osc.frequency.exponentialRampToValueAtTime(f1, t + dur * .3); osc.frequency.exponentialRampToValueAtTime(f0 * fR(1, 1.35), t + dur);
+  const vib = c.createOscillator(); vib.frequency.value = fR(5.5, 7.5); const vg = c.createGain(); vg.gain.value = fR(20, 45); vib.connect(vg); vg.connect(osc.frequency);
+  const na = c.createBufferSource(); na.buffer = FS.noise; na.loop = true; const nbp = c.createBiquadFilter(); nbp.type = 'bandpass'; nbp.frequency.value = 2600; nbp.Q.value = 1.1; const ng = c.createGain(); ng.gain.value = .5;
+  const fa = c.createBiquadFilter(), fb = c.createBiquadFilter(); fa.type = fb.type = 'bandpass'; fa.Q.value = 3; fb.Q.value = 5;
+  fa.frequency.setValueAtTime(fR(700, 950), t); fa.frequency.linearRampToValueAtTime(fR(550, 750), t + dur); fb.frequency.setValueAtTime(fR(1700, 2200), t); fb.frequency.linearRampToValueAtTime(fR(2400, 3200), t + dur * .5);
+  const mix = c.createGain(); mix.gain.value = 1; osc.connect(fa); osc.connect(fb); na.connect(nbp); nbp.connect(ng); ng.connect(fb); fa.connect(mix); fb.connect(mix);
+  const ws = c.createWaveShaper(), cur = new Float32Array(256); for (let i = 0; i < 256; i++) { const x = i / 128 - 1; cur[i] = Math.tanh(x * 3.2); } ws.curve = cur;
+  const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = fC(9000 / (1 + dist * .14), 900, 9000);
+  const g = c.createGain(); g.gain.setValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(vol, t + .06);
+  const trem = c.createOscillator(); trem.frequency.value = fR(11, 16); const tg = c.createGain(); tg.gain.value = vol * .22; trem.connect(tg); tg.connect(g.gain);
+  if (o.abrupt) { g.gain.setValueAtTime(vol, t + dur); g.gain.linearRampToValueAtTime(0, t + dur + .03); } else g.gain.exponentialRampToValueAtTime(.0001, t + dur + .5);
+  mix.connect(ws); ws.connect(lp); lp.connect(g);
+  const p = fPan(o.x, o.y == null ? 1.6 : o.y, o.z, o.ref || 1.5, o.roll == null ? .5 : o.roll); g.connect(p);
+  const end = t + dur + .6; osc.start(t); vib.start(t); na.start(t); trem.start(t); osc.stop(end); vib.stop(end); na.stop(end); trem.stop(end);
+  return p;
+}
+function fWail(x, z, dur) {                  // somebody crying far away: a wavering, breaking tone
+  const c = FS.c, t = c.currentTime + .03; dur = dur || 4.5; const o = c.createOscillator(); o.type = 'triangle';
+  o.frequency.setValueAtTime(fR(380, 460), t); for (let i = 1; i <= 5; i++) o.frequency.linearRampToValueAtTime(fR(330, 620), t + dur * i / 5);
+  const v = c.createOscillator(); v.frequency.value = 5.2; const vg = c.createGain(); vg.gain.value = 22; v.connect(vg); vg.connect(o.frequency);
+  const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1100; bp.Q.value = 1.8; const g = c.createGain(); g.gain.setValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(1.3, t + 1); g.gain.linearRampToValueAtTime(.9, t + dur * .7); g.gain.linearRampToValueAtTime(.0001, t + dur);
+  o.connect(bp); bp.connect(g); g.connect(fPan(x, 1.4, z, 2, .3)); o.start(t); v.start(t); o.stop(t + dur + .1); v.stop(t + dur + .1);
+}
+function fBreath(x, z, cycles) {             // slow wet breathing, very close
+  const c = FS.c; let t = c.currentTime + .05; const src = c.createBufferSource(); src.buffer = FS.noise; src.loop = true;
+  const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = .7; const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2400; const g = c.createGain(); g.gain.value = 0;
+  src.connect(bp); bp.connect(lp); lp.connect(g); g.connect(fPan(x, 1.5, z, .8, 1.6)); const t0 = t;
+  for (let i = 0; i < (cycles || 3); i++) {
+    const d = fR(.95, 1.3); g.gain.linearRampToValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(1.2, t + d); g.gain.linearRampToValueAtTime(.0001, t + d + .25);
+    bp.frequency.linearRampToValueAtTime(1300, t + d); t += d + .3; g.gain.linearRampToValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(1.5, t + .2); g.gain.linearRampToValueAtTime(.0001, t + 1.5);
+    bp.frequency.linearRampToValueAtTime(600, t + 1.4); t += 1.7;
+  }
+  src.start(t0, Math.random()); src.stop(t + .1);
+}
+function fThump(x, z, vol, f, roll) {              // a knock / a door: a low body and a click
+  const c = FS.c, t = c.currentTime + .02, o = c.createOscillator(), g = c.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(f || 140, t); o.frequency.exponentialRampToValueAtTime(48, t + .18);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + .28); const p = fPan(x, 1.3, z, 1.5, roll == null ? .9 : roll); o.connect(g); g.connect(p); o.start(t); o.stop(t + .3);
+  const s = c.createBufferSource(); s.buffer = FS.noise; const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 520; bp.Q.value = 1.2; const g2 = c.createGain(); g2.gain.setValueAtTime(vol * .8, t); g2.gain.exponentialRampToValueAtTime(.0001, t + .09);
+  s.connect(bp); bp.connect(g2); g2.connect(p); s.start(t, Math.random() * 2, .12);
+}
+function fScratch(x, z) {                    // nails on wood
+  const c = FS.c, t = c.currentTime + .03, s = c.createBufferSource(); s.buffer = FS.noise; s.loop = true; const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 3300; bp.Q.value = 2.2; const g = c.createGain(); g.gain.value = 0;
+  s.connect(bp); bp.connect(g); g.connect(fPan(x, 1.2, z, 1.2, 1)); let tt = t; for (let i = 0; i < 9; i++) { g.gain.linearRampToValueAtTime(.0001, tt); g.gain.linearRampToValueAtTime(fR(1.4, 3.2), tt + .03); g.gain.linearRampToValueAtTime(.0001, tt + .14); tt += fR(.12, .22); }
+  s.start(t, Math.random()); s.stop(tt + .2);
+}
+function fBell(f, t, vol, dest) {            // one music-box note
+  const c = FS.c; for (const [m, v, d] of [[1, 1, 1.6], [2.76, .35, .7], [5.4, .12, .35]]) {
+    const o = c.createOscillator(), g = c.createGain(); o.type = 'sine'; o.frequency.value = f * m; g.gain.setValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(vol * v, t + .004); g.gain.exponentialRampToValueAtTime(.0001, t + d); o.connect(g); g.connect(dest); o.start(t); o.stop(t + d + .05);
+  }
+}
+function fMusicBox(x, z) {                   // a slow, out-of-tune lullaby that slows down, drifts flat and stops mid-phrase
+  const c = FS.c, pat = fPick([[0, 3, 7, 3, 12, 10, 7, 3], [7, 5, 3, 1, 0, 1, 3, -2], [0, 1, 0, -2, 0, 3, 1, 0], [12, 10, 7, 8, 7, 3, 1, 0]]), p = fPan(x, 1.4, z, 3, .35);
+  let t = c.currentTime + .05, step = fR(.5, .68), drift = 0; const N = 11 + ((Math.random() * 9) | 0), base = 523.25 * Math.pow(2, fR(-3, 2) / 12);
+  for (let i = 0; i < N; i++) {
+    drift -= fR(0, 9) / 1200 * (i > 4 ? 1 : .3);
+    fBell(base * Math.pow(2, pat[i % pat.length] / 12 + drift + fR(-18, 18) / 1200), t, .35, p);
+    t += step * (1 + i * .035) * (Math.random() < .15 ? 1.8 : 1);
+  }
+  return t - c.currentTime;
+}
+function fSpeak(txt, vol) {                  // the browser's own voice, pitched all the way down and slowed: like someone muttering in the next room
+  if (!FEAR.voice || typeof speechSynthesis === 'undefined') return;
+  try { const u = new SpeechSynthesisUtterance(txt); u.volume = fC((vol || .5) * (CFG.vol / 100) * 1.4, 0, 1); u.pitch = 0; u.rate = .55; speechSynthesis.cancel(); speechSynthesis.speak(u); } catch (e) { FEAR.voice = false; }
+}
+function fHeart(v) {                         // lub-dub in the chest
+  const c = FS.c, t = c.currentTime + .01; for (const [dt, f, g0] of [[0, 62, 1], [.17, 54, .7]]) {
+    const o = c.createOscillator(), g = c.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(f, t + dt); o.frequency.exponentialRampToValueAtTime(34, t + dt + .16);
+    g.gain.setValueAtTime(.0001, t + dt); g.gain.linearRampToValueAtTime(v * g0, t + dt + .012); g.gain.exponentialRampToValueAtTime(.0001, t + dt + .2); o.connect(g); g.connect(FS.bus); o.start(t + dt); o.stop(t + dt + .25);
+  }
+}
+function fStep(x, z, v) {                    // a footstep that is not yours
+  const c = FS.c, t = c.currentTime + .01, p = fPan(x, .2, z, 1.2, 1.1), s = c.createBufferSource(); s.buffer = FS.noise; const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 480; bp.Q.value = 1.4; const g = c.createGain();
+  g.gain.setValueAtTime(v * 2.8, t); g.gain.exponentialRampToValueAtTime(.0001, t + .13); s.connect(bp); bp.connect(g); g.connect(p); s.start(t, Math.random() * 2, .16);
+  const o = c.createOscillator(), g2 = c.createGain(); o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(55, t + .1); g2.gain.setValueAtTime(v * 2, t); g2.gain.exponentialRampToValueAtTime(.0001, t + .12); o.connect(g2); g2.connect(p); o.start(t); o.stop(t + .15);
+}
+
+// ---------- sight ----------
+function fUi() {
+  if (FS.vig) return;
+  const mk = (css) => { const d = document.createElement('div'); d.style.cssText = css; document.body.appendChild(d); return d; };
+  FS.vig = mk('position:fixed;inset:0;pointer-events:none;z-index:11;opacity:0;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 38%,rgba(0,0,0,.55) 72%,rgba(0,0,0,.95) 100%)');
+  FS.fl = mk('position:fixed;inset:0;pointer-events:none;z-index:12;opacity:0;background:#fff');
+}
+function fEyeTex() {
+  if (FS.eyeTex) return FS.eyeTex; const cv = document.createElement('canvas'); cv.width = 128; cv.height = 64; const x = cv.getContext('2d');
+  for (const cx of [38, 90]) { const g = x.createRadialGradient(cx, 32, 1, cx, 32, 22); g.addColorStop(0, 'rgba(255,250,200,1)'); g.addColorStop(.25, 'rgba(255,200,120,.9)'); g.addColorStop(.6, 'rgba(255,40,30,.3)'); g.addColorStop(1, 'rgba(255,0,0,0)'); x.fillStyle = g; x.save(); x.translate(cx, 32); x.scale(.75, 1.15); x.translate(-cx, -32); x.fillRect(cx - 24, 0, 48, 64); x.restore(); }
+  return FS.eyeTex = new THREE.CanvasTexture(cv);
+}
+function fEyeMat(o) { return new THREE.SpriteMaterial({ map: fEyeTex(), transparent: true, opacity: o || 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }); }
+function fSpot(minM, maxM, offView) {        // an open tile minM..maxM metres away with a clear line to you; offView = outside your field of view
+  const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw);
+  for (let i = 0; i < 70; i++) {
+    const a = Math.random() * 6.283, r = fR(minM, maxM), x = P.x + Math.cos(a) * r, z = P.z + Math.sin(a) * r, tx = Math.floor(x / T), ty = Math.floor(z / T);
+    if (tx < 1 || ty < 1 || tx >= GW - 1 || ty >= GH - 1 || world.g[ty * GW + tx] !== 0) continue;
+    const cx = (tx + .5) * T, cz = (ty + .5) * T; if (!xSee(cx, cz)) continue;
+    const d = Math.hypot(cx - P.x, cz - P.z) || 1, look = fx * (cx - P.x) / d + fz * (cz - P.z) / d; if (offView && look > .3) continue;
+    return { x: cx, z: cz, d, look };
+  }
+  return null;
+}
+function fEyesTick(dt, fear) {
+  const want = Math.round(FEAR.eyes[0] + (FEAR.eyes[1] - FEAR.eyes[0]) * fear), fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw); let n = 0;
+  for (const e of FS.eyes) {
+    if (!e.on) continue; n++; e.age += dt; const dx = e.x - P.x, dz = e.z - P.z, d = Math.hypot(dx, dz) || 1, look = (fx * dx + fz * dz) / d, los = xSee(e.x, e.z);
+    if (look > .955 && los) e.seen += dt; else e.seen = Math.max(0, e.seen - dt * .5);
+    if (!los) e.lost += dt; else e.lost = 0;
+    if (!e.out && (e.seen > .3 || e.age > e.life || d < 3.5 || e.lost > 4)) { e.out = true; if (e.seen > .3 && Math.random() < .5) fWhisper({ x: e.x, y: e.y, z: e.z, vol: .8, n: 3 }); }
+    e.bl -= dt; if (e.bl <= 0) { e.bl = fR(2, 6); e.blk = .16; } if (e.blk > 0) e.blk -= dt;
+    let op = e.out ? e.op - dt * 4 : Math.min(.95, e.age / 2.4 * .95); e.op = Math.max(0, op);
+    if (e.out && e.op <= 0) { e.on = false; e.s.visible = false; continue; }
+    e.s.material.opacity = e.op * (e.blk > 0 ? .08 : 1) * (.85 + .15 * Math.sin(e.age * 3 + e.ph)); e.s.position.set(e.x, e.y, e.z); e.s.scale.set(.5 * (e.big || 1), .25 * (e.big || 1) * (e.blk > 0 ? .25 : 1), 1);
+  }
+  FS.eyeT -= dt; if (FS.eyeT <= 0 && n < want && fOn()) {
+    FS.eyeT = fR(2, 5.5) * (1.25 - fear * .7); const sp = fSpot(7, 26, false);
+    if (sp && sp.look > -.4 && sp.look < .8) {      // in your peripheral vision, or just behind it
+      let e = FS.eyes.find(q => !q.on); if (!e) { const s = new THREE.Sprite(fEyeMat(0)); s.visible = false; scene.add(s); FS.eyes.push(e = { s }); }
+      const low = Math.random() < .3; Object.assign(e, { on: true, out: false, x: sp.x, z: sp.z, y: low ? fR(.25, .6) : fR(1.0, 2.9), age: 0, life: fR(14, 34), seen: 0, lost: 0, op: 0, bl: fR(1, 4), blk: 0, ph: Math.random() * 6, big: low ? 1.2 : 1 }); e.s.visible = true;
+    }
+  }
+}
+function fFigure() {
+  if (FS.fig) return FS.fig; const f = scareFigure().clone(); f.visible = false; scene.add(f); const s = new THREE.Sprite(fEyeMat(1)); s.scale.set(.62, .31, 1); s.position.set(0, 1.97, .17); f.add(s); FS.figEye = s; return FS.fig = f;
+}
+function fFlash(a, col) { fUi(); FS.fl.style.background = col || '#fff'; FS.flA = a; }
+function fStalkerTick(dt) {
+  const S = FS.sk, g = FS.fig || (fOn() ? fFigure() : null); if (!g) return; FS.tension = 0;
+  if (!fOn()) { g.visible = false; return; }
+  if (S.st === 'wait') { S.t -= dt; if (S.t <= 0 && !Scare.act && P.down <= 0) fStalkerSpawn(); return; }
+  const dx = g.position.x - P.x, dz = g.position.z - P.z, d = Math.hypot(dx, dz) || 1, look = (-Math.sin(P.yaw) * dx - Math.cos(P.yaw) * dz) / d, los = xSee(g.position.x, g.position.z);
+  g.rotation.y = Math.atan2(dx, dz);
+  if (S.st === 'stand') {
+    S.age += dt; FS.tension = fC(1 - d / 28, 0, 1);
+    if (look > .86 && los) S.look += dt; else S.look = Math.max(0, S.look - dt * .7);
+    S.lost = los ? 0 : S.lost + dt;
+    FS.figEye.material.opacity = fC(S.age / 1.5, 0, 1) * (look > .5 ? 1 : .55);
+    S.whT -= dt; if (S.whT <= 0 && look < .5) { S.whT = fR(5, 9); fWhisper({ x: g.position.x, y: 1.8, z: g.position.z, vol: 1.1, n: 4 }); }
+    if (d < 2.8 || (S.look > .9 && S.stage >= 4)) return fRush();
+    if (S.look > .9) {                                       // you looked: it goes. next time it is closer.
+      g.visible = false; S.st = 'wait'; S.stage = Math.min(4, S.stage + 1); S.t = fR(9, 20) * (1.1 - FS.fear * .5); S.look = 0;
+      fWhisper({ x: g.position.x, y: 1.8, z: g.position.z, vol: 1.4, n: 5 }); Aud.soft(90, 52, 1.1, .1); return;
+    }
+    if (S.lost > 8 || S.age > 55 || d > 40) { g.visible = false; S.st = 'wait'; S.t = fR(8, 16); }
+  } else if (S.st === 'rush') {
+    const sp = FEAR.rush; g.position.x -= dx / d * sp * dt; g.position.z -= dz / d * sp * dt; g.position.y = Math.abs(Math.sin(performance.now() * .02)) * .12; FS.tension = 1; P.flickT = Math.max(P.flickT, .3);
+    if (FS.rushP && FS.rushP.positionX) { FS.rushP.positionX.value = g.position.x; FS.rushP.positionZ.value = g.position.z; }
+    if (d < 1.2) {                                           // it reached you
+      g.visible = false; g.position.y = 0; S.st = 'wait'; S.t = fR(70, 110); S.stage = 2; S.look = 0; FS.rushP = null;
+      Aud.stinger(1); Scare.shake = 1; P.flickT = Math.max(P.flickT, 1.8); fFlash(.95, '#fff'); setTimeout(() => fFlash(.5, '#600'), 90);
+      const a = fAt(.5, 160); fScream({ x: a.x, y: 1.5, z: a.z, dur: 1.1, f0: 620, f1: 1500, vol: 3.2, dist: 1, ref: .6, roll: 1.6 }); fBreath(a.x, a.z, 1);
+      if (typeof ES !== 'undefined' && ES.dread != null) ES.dread = Math.min(100, ES.dread + 22);
+    }
+  }
+}
+function fStalkerSpawn() {
+  const S = FS.sk, m = FEAR.stalkerDist[S.stage] || 7, sp = fSpot(m * .85, m * 1.2, S.fails < 6) || (++S.fails && null);
+  if (!sp) { S.t = 1.2; return; } S.fails = 0; const g = fFigure(); g.position.set(sp.x, 0, sp.z); g.visible = true; S.st = 'stand'; S.age = 0; S.look = 0; S.lost = 0; S.whT = fR(3, 6); FS.figEye.material.opacity = 0;
+  fWhisper({ x: sp.x, y: 1.8, z: sp.z, vol: 1, n: 3 }); if (typeof ES !== 'undefined' && ES.dread != null) ES.dread = Math.min(100, ES.dread + 4);
+}
+function fRush() {
+  const S = FS.sk, g = FS.fig; S.st = 'rush'; FS.rushP = fScream({ x: g.position.x, y: 1.7, z: g.position.z, dur: 2.6, f0: 620, f1: 1500, vol: 1.15, dist: 8, ref: 2, roll: .8 }); Scare.shake = Math.max(Scare.shake, .3); P.flickT = 1; fSpeak('run', .6);
+}
+
+// ---------- the director: things happen, more often the more scared you are ----------
+const FEV = [
+  ['whisper', 3, 0], ['scream', 2, .15], ['wail', 1.2, .1], ['music', 1.6, .1], ['knock', 1.5, .2], ['door', 1, 0], ['breath', 1.7, .2], ['silence', 1.1, .25],
+  ['follow', 1.3, .3], ['flicker', 1.5, .1], ['name', 1.2, .3], ['gaze', .7, .55], ['scratch', 1, .2]
+];
+function fEvent(name) {
+  const c = FS.c, say = (t) => { try { xWhisper(t); } catch (e) { } };
+  if (name === 'whisper') {                   // two or three voices pass around your head
+    for (let i = 0; i < 2 + ((Math.random() * 2) | 0); i++) { const a = fAt(fR(.5, 1.4), fR(80, 280)), b = fAt(fR(.5, 1.4), fR(80, 280)); setTimeout(() => fWhisper({ x: a.x, y: a.y, z: a.z, vol: 1.25, sweep: { x: b.x, z: b.z } }), i * 380); }
+    if (Math.random() < .5) say(fPick(FEAR.lines)); if (Math.random() < .25) setTimeout(() => fSpeak(fPick(FEAR.spoken), .4), 700);
+  } else if (name === 'scream') {
+    const a = fAt(fR(28, 50), fR(0, 360)); fScream({ x: a.x, z: a.z, dur: fR(1.1, 1.9), f0: fR(520, 760), f1: fR(1300, 1800), vol: .95, dist: 35, abrupt: Math.random() < .7, ref: 3, roll: .25 }); P.flickT = Math.max(P.flickT, .35); FS.silT = Math.max(FS.silT, 2.5);
+  } else if (name === 'wail') { const a = fAt(fR(18, 34), fR(0, 360)); fWail(a.x, a.z, fR(4, 6.5));
+  } else if (name === 'music') { const a = fAt(fR(12, 24), fR(0, 360)); fMusicBox(a.x, a.z);
+  } else if (name === 'knock') {              // three slow knocks from just beyond the wall, then something moves
+    const a = fAt(fR(3.5, 7), fR(60, 300)); [0, 520, 1050].forEach(ms => setTimeout(() => fThump(a.x, a.z, 1.4, 150), ms)); if (Math.random() < .5) setTimeout(() => { const b = fAt(2.2, fR(120, 240)); fScratch(b.x, b.z); }, 2200);
+  } else if (name === 'door') { const a = fAt(fR(14, 30), fR(0, 360)); fThump(a.x, a.z, 2.4, 90, .3); setTimeout(() => fThump(a.x, a.z, 1.1, 70, .3), 160);
+  } else if (name === 'breath') { const a = fAt(.55, fR(150, 210), 1.5); fBreath(a.x, a.z, 2 + ((Math.random() * 2) | 0)); P.flickT = Math.max(P.flickT, .25);
+  } else if (name === 'silence') {            // everything stops. you hear only yourself. then something answers.
+    const sec = fR(4, 7); FS.silT = sec; const g = Aud.m.gain, v = CFG.vol / 100, t = c.currentTime; g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(v * .03, t + .3); g.setValueAtTime(v * .03, t + sec); g.linearRampToValueAtTime(v, t + sec + 1.6);
+    setTimeout(() => { if (!FS.c) return; const a = fAt(.5, fR(140, 220)); if (Math.random() < .6) fBreath(a.x, a.z, 1); else fWhisper({ x: a.x, y: 1.5, z: a.z, vol: 1.6, n: 4 }); }, (sec - 1.2) * 1000);
+  } else if (name === 'follow') { FS.stalk = fR(14, 26);
+  } else if (name === 'flicker') { P.flickT = Math.max(P.flickT, fR(1, 2)); setTimeout(() => { const a = fAt(.9, fR(100, 260)); fWhisper({ x: a.x, y: a.y, z: a.z, vol: 1.3, n: 3 }); say('turn it off'); }, 700);
+  } else if (name === 'name') { const nm = (typeof me !== 'undefined' && me && me.name) || 'you'; say(nm); const a = fAt(.8, fR(120, 240)); fWhisper({ x: a.x, y: a.y, z: a.z, vol: 1.2, n: 4 }); setTimeout(() => fSpeak(nm.split(' ')[0], .55), 500);
+  } else if (name === 'scratch') { const a = fAt(fR(2.5, 5), fR(60, 300)); fScratch(a.x, a.z);
+  } else if (name === 'gaze') {               // the dark is full of eyes. then all at once, none.
+    for (let i = 0; i < 6; i++) { const sp = fSpot(7, 20, false); if (!sp) continue; let e = FS.eyes.find(q => !q.on); if (!e) { const s = new THREE.Sprite(fEyeMat(0)); s.visible = false; scene.add(s); FS.eyes.push(e = { s }); }
+      Object.assign(e, { on: true, out: false, x: sp.x, z: sp.z, y: fR(.3, 2.8), age: 0, life: fR(5, 8), seen: -2, lost: 0, op: 0, bl: fR(1, 3), blk: 0, ph: Math.random() * 6, big: 1 }); e.s.visible = true; }
+    FS.silT = Math.max(FS.silT, 3); setTimeout(() => { const a = fAt(.7, 180); fWhisper({ x: a.x, y: 1.6, z: a.z, vol: 1.5, n: 7 }); }, 5200); say('we see you');
+  }
+}
+function fDirector(dt, fear) {
+  FS.evT -= dt;
+  if (FS.evT <= 0 && !Scare.act && fOn()) {
+    FS.evT = (FEAR.gap[0] + (FEAR.gap[1] - FEAR.gap[0]) * fear) * fR(.7, 1.3);
+    const first = !FS.started; FS.started = 1; const pool = first ? [FEV[0]] : FEV.filter(e => fear >= e[2]); let w = 0; for (const e of pool) w += e[1];
+    let r = Math.random() * w, pick = pool[0]; for (const e of pool) { r -= e[1]; if (r <= 0) { pick = e; break; } } fEvent(pick[0]);
+  }
+  FS.muT -= dt; if (FS.muT <= 0 && fOn()) {      // the constant low murmur: you are never quite alone
+    FS.muT = fR(FEAR.murmur[0], FEAR.murmur[1]) * (1.2 - fear * .5); const a = fAt(fR(1, 3.5), fR(0, 360)); fWhisper({ x: a.x, y: 1.4, z: a.z, vol: .9, n: 3 + ((Math.random() * 4) | 0) });
+  }
+}
+
+// ---------- footsteps behind you ----------
+function fFollowStep(v) {
+  if (!FS.c || !fOn()) return; const now = performance.now(); FS.lastStep = now; FS.trail = 0; const going = FS.stalk > 0 || (FS.fear > .5 && Math.random() < .2);
+  if (!going) return; const dly = fR(300, 480), a = fAt(fR(3, 4.5), 180);
+  setTimeout(() => { if (FS.c) fStep(a.x, a.z, .55 * v + .15); }, dly);
+}
+function fTrail(dt) {                          // when you stop, it takes two more steps. then silence.
+  if (!(FS.stalk > 0)) { FS.trail = 0; return; } const idle = performance.now() - FS.lastStep;
+  if (idle > 900 && FS.trail < 3 && P.speed < .5) { FS.trailT -= dt; if (FS.trailT <= 0) { FS.trailT = .6; FS.trail++; const a = fAt(2.6 - FS.trail * .7, 180); fStep(a.x, a.z, .7); } }
+}
+
+// ---------- every frame ----------
+function fMute() { if (FS.out) FS.out.gain.setTargetAtTime(0, FS.c.currentTime, .15); }
+function fReset() {
+  FS.wld = world; for (const e of FS.eyes) { e.on = false; e.s.visible = false; } if (FS.fig) FS.fig.visible = false;
+  Object.assign(FS.sk, { st: 'wait', t: fR(FEAR.stalkerFirst[0], FEAR.stalkerFirst[1]) * (FS.started ? .5 : 1), stage: 0, look: 0, lost: 0, age: 0, fails: 0 }); FS.rushP = null;
+  FS.evT = FS.started ? fR(6, 12) : fR(FEAR.firstEvent[0], FEAR.firstEvent[1]); FS.stalk = 0; FS.eyeT = 3;
+  try { if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel(); } catch (e) { }
+}
+function updateFear(dt, t) {
+  if (!started || P.escaped || !Aud.ctx) { fMute(); return; }
+  if (!FS.c || FS.c !== Aud.ctx) { if (!fBuild()) return; FS.on = true; }
+  if (!FS.hooked) { FS.hooked = true; X.whisperEvery = [26, 55]; X.blackEvery = [75, 150]; X.watchEvery = [1e6, 1e6]; X.whispers.push(...FEAR.lines); }
+  if (FS.wld !== world) fReset(); fUi(); fListen(); dt = Math.min(dt, .1);
+  if (P.stepAcc < FS.acc - .3 && P.grounded) fFollowStep(P.speed > 4.2 ? 1 : .6); FS.acc = P.stepAcc;      // you took a step (P.stepAcc resets on every footstep)
+  // fear: 0..1
+  const dark = !P.flash || (typeof Torch !== 'undefined' && Torch.k < .3), dread = (typeof ES !== 'undefined' && ES.dread) ? ES.dread / 100 : 0;
+  const target = fC(FEAR.base[Math.min(2, LV)] + (dark ? .18 : 0) + dread * .35 + (P.hp < 50 ? .14 : 0) + Math.min(.15, (t - (FS.t0 || (FS.t0 = t))) / 900) + FS.tension * .3 + FS.sk.stage * .03 + (typeof XS !== 'undefined' && XS.black > 0 ? .25 : 0), 0, 1);
+  FS.fear += (target - FS.fear) * (1 - Math.exp(-.5 * dt)); const f = FS.fear, on = fOn(), now = FS.c.currentTime;
+  if (FS.silT > 0) FS.silT -= dt; const q = FS.silT > 0 ? .08 : 1, m = FEAR.music;
+  // levels
+  FS.out.gain.setTargetAtTime(FEAR.vol * (CFG.vol / 100) * 1.25, now, .1); const d = FS.d;
+  d.padG.gain.setTargetAtTime((.05 + .1 * f + FS.tension * .1) * m * q, now, .8); d.shG.gain.setTargetAtTime(Math.max(0, f - .35) * .06 * m * q + FS.tension * .03, now, 1.2);
+  d.subG.gain.setTargetAtTime((.03 + .07 * f) * m * q, now, 1); d.wG.gain.setTargetAtTime((.1 + .3 * f) * m * q, now, 1.5);
+  d.padLP.frequency.setTargetAtTime(210 + 280 * f + FS.tension * 260, now, 1);
+  // heartbeat (louder and faster as fear and the Stalker's closeness rise)
+  const hb = Math.max(f - .3, FS.tension * .9); FS.hbT -= dt; if (hb > .05 && FS.hbT <= 0 && FS.silT <= 0) { FS.hbT = 1.15 - .6 * hb; FS.pulse = 1; fHeart((.1 + .5 * hb) * m); }
+  FS.pulse = Math.max(0, FS.pulse - dt * 3);
+  // vignette + flash
+  FS.vig.style.opacity = on ? fC(.25 + .55 * f + FS.pulse * .12 * hb + FS.tension * .25, 0, 1).toFixed(3) : '0';
+  if (FS.flA > .01) { FS.flA = Math.max(0, FS.flA - dt * 2.2); FS.fl.style.opacity = FS.flA.toFixed(2); } else if (FS.fl.style.opacity !== '0') FS.fl.style.opacity = 0;
+  camera.rotation.z += Math.sin(t * .37) * .0045 * f;                         // the world never quite sits level
+  if (!on) { for (const e of FS.eyes) { e.on = false; e.s.visible = false; } if (FS.fig) FS.fig.visible = false; return; }
+  // the unseen
+  if (typeof XS !== 'undefined') { if (XS.black > 0 && !FS.blk) { FS.blk = true; const n = 3; for (let i = 0; i < n; i++) { const a = fAt(fR(.5, 1.3), fR(60, 300)); setTimeout(() => fWhisper({ x: a.x, y: 1.5, z: a.z, vol: 1.3, n: 6 }), i * 450); } setTimeout(() => { const a = fAt(.5, 180); fBreath(a.x, a.z, 2); }, 1500); } else if (XS.black <= 0) FS.blk = false; }
+  if (FS.stalk > 0) FS.stalk -= dt; fDirector(dt, f); fTrail(dt); fEyesTick(dt, f); fStalkerTick(dt);
+}
+{ const ux = updateExtras; updateExtras = function (dt, t) { ux(dt, t); if (FS.errs > 6) return; try { updateFear(dt, t); } catch (e) { FS.errs++; console.error('fear.html:', e); } }; }
+  </script>
+</body>
+
+</html>
