@@ -221,7 +221,7 @@ function escSetup() {                                // build this level's puzzl
     ES.locks.push(lk);
   }
   if (plan.station) ES.station = escBuildStation(plan.station); else ES.noStation = true;      // no spot for the machine: the puzzle simply completes as you collect
-  escSeals(); escSealDraw();
+  escSeals(); escSealDraw(); ES.powerOn = undefined; escPower(false);
   if (typeof net !== 'undefined' && netOn) net.set({ es: LV + ';' });
 }
 function escClear() {
@@ -260,7 +260,7 @@ function escTake(o, mine) {
     if (eOn() && mine) { P.flickT = Math.max(P.flickT, .3); ES.dread = Math.min(100, ES.dread + 5); }
     if (pr.have >= pr.need) setTimeout(() => toast('You have all the digits: ' + ES.code.split('').join(' ') + '. Type it into the exit console next to the exit.'), 2600);
   } else if (o.kind === 'fuse') {
-    if (ES.noStation) { ES.inserted++; escSealDraw(); toast('🔌 Fuse (' + ES.inserted + '/' + ES.need + ')'); Aud.tone(500, 900, .3, .1, 'triangle'); }
+    if (ES.noStation) { ES.inserted++; escSealDraw(); escPower(true); toast('🔌 Fuse (' + ES.inserted + '/' + ES.need + ')'); Aud.tone(500, 900, .3, .1, 'triangle'); }
     else if (mine) { ES.carry++; Aud.tone(500, 900, .3, .1, 'triangle'); toast('🔌 Fuse — carry it to the fuse box out on the midway. Something may be listening.'); }
     else toast('A teammate picked up a fuse.');
   }
@@ -277,8 +277,16 @@ function escDone() {
   return pr.have >= pr.need;
 }
 function escCheck() { if (ES.sealed && escDone()) { ES.sealed = false; escSealDraw(); escHourStart(); } }
+function escPower(announce) {                      // carnival: every lamp on the midway is dead until the fuse box has all its fuses. Flashlight + HUD are never touched.
+  const w = world; if (!w || !w.car || !w.carLights || !ES.need) return;
+  const on = ES.inserted >= ES.need, was = ES.powerOn;
+  if (was === on) return; ES.powerOn = on;
+  for (const l of w.carLights) { if (l.int0 === undefined) l.int0 = l.int; l.int = on ? l.int0 : 0; }
+  for (const g of (w.carGlow || [])) g.visible = on;
+  if (on && announce) { P.flickT = .9; Aud.rumble(); Aud.tone(110, 440, 1.6, .12, 'sawtooth'); setTimeout(() => Aud.burst(300, .1, .4, .9), 250); toast('⚡ The breaker slams on — the whole midway lights up!'); }
+}
 function escFuseIn(mine) {                           // slot a fuse into the box
-  ES.inserted++; if (ES.station) ES.station.lampSet(ES.inserted - 1, true); escSealDraw();
+  ES.inserted++; if (ES.station) ES.station.lampSet(ES.inserted - 1, true); escSealDraw(); escPower(true);
   if (mine) { ES.carry--; ES.mine.add('f' + (ES.inserted - 1)); escPublish(); }
   Aud.burst(300, .1, .3, .9); Aud.tone(880, 840, 1.4, .1, 'triangle'); setTimeout(() => Aud.tone(660, 640, 1.2, .08, 'triangle'), 350);       // the carnival bell
   toast((mine ? '🔌 Fuse slotted in' : 'A teammate slotted in a fuse') + ' (' + ES.inserted + '/' + ES.need + '). The bell rang across the fairground…');
