@@ -7,7 +7,7 @@
 </head>
 
 <body>
-  <!-- ALL ABOUT ITEMS: which items sit in which door room (generation), the little floating 3D pickups, picking them up with E,
+  <!-- ALL ABOUT ITEMS: which items sit in which door room (generation), the little 3D pickups lying on tables and closets, picking them up with E,
        the HOTBAR (bottom centre, 5 slots) and what each item does when you use it. index.html loads this file at start-up and runs the script below.
        Used by: doorsGen calls itemsGen (items only ever spawn inside door rooms), the three builders (buildWorld / libBuild / casBuild) call itemsBuild,
        the game loop calls updateItems, the E key calls itemInteract (before doors and the beacon), library.html calls itemsReset on every new level.
@@ -57,26 +57,34 @@ function itemsGen(g, vaults, W, R) {
 function itemsBuild(root, world) {
   const list = world.items || [], T3 = 3.2;
   world.itemObjs = [];
+  // every pickup LIES on a table or on top of a closet (furniture.html) instead of floating, with a soft glow on the surface under it
   const geo = {
     battery: [new THREE.CylinderGeometry(.075, .075, .26, 10), new THREE.CylinderGeometry(.035, .035, .05, 8)],
     medkit: [new THREE.BoxGeometry(.32, .2, .13), new THREE.BoxGeometry(.2, .05, .14), new THREE.BoxGeometry(.05, .15, .14)],
     flare: [new THREE.CylinderGeometry(.04, .04, .3, 8), new THREE.CylinderGeometry(.05, .05, .05, 8)],
     drink: [new THREE.CylinderGeometry(.065, .065, .22, 10), new THREE.CylinderGeometry(.05, .05, .03, 10)]
   };
+  const rest = { battery: .075, medkit: .065, flare: .05, drink: .065 };         // how high the middle of each one sits above the surface when it lies there
   const mat = (c) => new THREE.MeshBasicMaterial({ color: c });
   const body = {}, trim = {};
   for (const k in ITEM.types) { const c = new THREE.Color(ITEM.types[k].col); body[k] = mat(c.clone().multiplyScalar(.85)); trim[k] = mat(k === 'medkit' ? 0xffffff : 0x2a2a2a); }
-  const white = mat(0xf2f2f2);
+  const white = mat(0xf2f2f2), B = furnBatch(world, furnTint(typeof LV === 'number' ? LV : 2));
   for (const it of list) {
-    const grp = new THREE.Group(), G = geo[it.t], col = ITEM.types[it.t].col;
-    if (it.t === 'medkit') { grp.add(new THREE.Mesh(G[0], white)); const a = new THREE.Mesh(G[1], body.medkit), b = new THREE.Mesh(G[2], body.medkit); a.position.z = b.position.z = .005; grp.add(a, b); }
-    else { grp.add(new THREE.Mesh(G[0], body[it.t])); const cap = new THREE.Mesh(G[1], it.t === 'flare' ? mat(0xffe9a0) : trim[it.t]); cap.position.y = G[0].parameters.height / 2 + .02; grp.add(cap); }
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: A.tex.glow, color: col, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity: .8 }));
-    glow.scale.set(1.5, 1.5, 1); grp.add(glow);
-    const x = (it.tx + .5) * T3 + it.dx, z = (it.ty + .5) * T3 + it.dz;
-    grp.position.set(x, .9, z); root.add(grp);
-    world.itemObjs.push({ id: it.id, t: it.t, x, z, grp, ph: it.id * 1.9, taken: false });
+    const col = ITEM.types[it.t].col, G = geo[it.t];
+    const room = (world.rooms || []).find(r => it.tx >= r.x0 && it.tx < r.x0 + r.w && it.ty >= r.y0 && it.ty < r.y0 + r.h);
+    const f = B.place((it.tx + .5) * T3 + it.dx, (it.ty + .5) * T3 + it.dz, room, world.doors, it.id * 7 + it.tx * 3 + it.ty);
+    const grp = new THREE.Group(), inner = new THREE.Group(); grp.add(inner);
+    if (it.t === 'medkit') { inner.add(new THREE.Mesh(G[0], white)); const a = new THREE.Mesh(G[1], body.medkit), b = new THREE.Mesh(G[2], body.medkit); a.position.z = b.position.z = .005; inner.add(a, b); inner.rotation.x = -Math.PI / 2; }
+    else { inner.add(new THREE.Mesh(G[0], body[it.t])); const cap = new THREE.Mesh(G[1], it.t === 'flare' ? mat(0xffe9a0) : trim[it.t]); cap.position.y = G[0].parameters.height / 2 + .02; inner.add(cap); inner.rotation.z = Math.PI / 2; }
+    const glowMat = (o) => new THREE.SpriteMaterial({ map: A.tex.glow, color: col, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity: o });
+    const halo = new THREE.Sprite(glowMat(.4)); halo.scale.set(.8, .8, 1); halo.position.y = .06; grp.add(halo);          // a little glow around it
+    const pool = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: A.tex.glow, color: col, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity: .55, side: THREE.DoubleSide }));
+    pool.rotation.x = -Math.PI / 2; pool.scale.set(.95, .95, 1); pool.position.y = -rest[it.t] + .012; grp.add(pool);              // and a pool of light on the wood under it
+    grp.rotation.y = f.yaw + (((it.id * 2.399) % 6.283) - 3.14) * .5;
+    grp.position.set(f.x, f.y + rest[it.t], f.z); root.add(grp);
+    world.itemObjs.push({ id: it.id, t: it.t, x: f.x, y: f.y, z: f.z, grp, ph: it.id * 1.9, taken: false });
   }
+  const furn = B.build(); root.add(furn); world.furn = furn;
 }
 
 // ---------- inventory ----------
@@ -188,7 +196,7 @@ function updateItems(dt, t) {
     for (const o of os) {
       if (o.taken) continue;
       const near = Math.abs(P.x - o.x) < 44 && Math.abs(P.z - o.z) < 44; o.grp.visible = near;
-      if (near) { o.grp.rotation.y = t * 1.3 + o.ph; o.grp.position.y = .9 + Math.sin(t * 2.1 + o.ph) * .07; }
+      if (near) o.grp.children[1].material.opacity = .32 + Math.sin(t * 1.7 + o.ph) * .1;        // they just lie there and breathe a faint glow (no hovering or spinning)
     }
     // items other players picked up (merged from their presence)
     INV.scanT -= dt;
