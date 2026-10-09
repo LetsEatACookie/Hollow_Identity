@@ -13,7 +13,7 @@
          Level 2 - LIBRARY   "CODE"  : four NOTES lie in the reading rooms, each one gives one digit of the exit code. One of those rooms is locked (red glow): its Rusty Key
                                        lies in another room. With the four digits, walk to the EXIT CONSOLE next to the exit, press E and type the code. A wrong code is loud.
          Level 3 - CARNIVAL  "FUSES" : the midway is dead. Three FUSES lie on tables in the tents. Carry them to the FUSE BOX out in the middle of the fairground and press E to slot each in
-                                       (every clunk rings the carnival bell and calls Pepe over). When all three are in, the exit powers up.
+                                       (every clunk rings the carnival bell and draws the roamer over). When all three are in, the exit powers up.
        Everything you find lies on a table or on a closet (furniture.html) with a soft glow. They hum when you're near (press H for a hint, it costs nerve).
        Teammates share everything: finds, digits, unlocks and fuses that were slotted in.
        Breaking the seal starts THE FINAL HOUR (siren, blackouts, the roamer enraged, the Mimic sent after you, a light-pillar over the exit). DREAD (bottom-left) rises in the dark and near monsters.
@@ -261,7 +261,7 @@ function escTake(o, mine) {
     if (pr.have >= pr.need) setTimeout(() => toast('You have all the digits: ' + ES.code.split('').join(' ') + '. Type it into the exit console next to the exit.'), 2600);
   } else if (o.kind === 'fuse') {
     if (ES.noStation) { ES.inserted++; escSealDraw(); toast('🔌 Fuse (' + ES.inserted + '/' + ES.need + ')'); Aud.tone(500, 900, .3, .1, 'triangle'); }
-    else if (mine) { ES.carry++; Aud.tone(500, 900, .3, .1, 'triangle'); toast('🔌 Fuse — carry it to the fuse box out on the midway. Pepe is listening.'); }
+    else if (mine) { ES.carry++; Aud.tone(500, 900, .3, .1, 'triangle'); toast('🔌 Fuse — carry it to the fuse box out on the midway. Something may be listening.'); }
     else toast('A teammate picked up a fuse.');
   }
   escCheck();

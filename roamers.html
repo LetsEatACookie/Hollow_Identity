@@ -7,13 +7,14 @@
 </head>
 
 <body>
-  <!-- ROAMERS: one creature that wanders each map on its own, with its own special ability (its PERK).
+  <!-- ROAMERS: one creature that wanders each map on its own, with its own special ability (its PERK). Nothing on screen announces it: you find out the hard way.
        index.html loads this file at start-up and calls updateRoamers(dt, t) every frame (right after updateMimic).
        Level 1 (garden)   - THE GRASS MONSTER  perk "Grass Cloak"    : melts into the overgrowth, lies in wait, then lunges as you walk past
        Level 2 (library)  - THE BOOKWATCHER    perk "Hush"            : while its eyes are open on you, you can't sprint and your torch gutters
        Level 3 (carnival) - PEPE THE CLOWN     perk "Sticky Fingers"  : steals a hotbar item instead of hurting you; flash him to make him drop it
-       Like the Mimic and the jumpscares they are local to each player (nothing is sent over the network) and they follow the "Jumpscares" setting.
-       Your torch is the universal counter: keep your beam on any of them for a moment and they back off (each reacts differently).
+       MULTIPLAYER: everyone in a room sees the SAME creature at the SAME time. One player's client (the lowest peer id on the level) runs its brain and publishes it; everybody else draws it.
+       Hits, steals and drops land on whoever was actually hit. If the player running it leaves or escapes, the next one takes over where it stands. Solo play just runs it locally.
+       Any player's torch is the universal counter: keep a beam on it for a moment and it backs off (each reacts differently). They follow the "Jumpscares" setting.
        Tune everything in the RM object below. Type summonRoamer() in the browser console to bring the current level's roamer out right now. -->
   <script>
 'use strict';
@@ -24,9 +25,9 @@ const RM = {
   clown:  { delay: 20, roam: 2.1, chase: 4.1, flee: 4.6, sight: 20, hear: 14, bite: 1.2, pieDmg: 6, honk: [6, 12], loot: 22, cool: 35, beamS: 1.1, beamD: 11 }
 };
 const RT = [
-  { id: 'grass', name: 'The Grass Monster', icon: '🌿', perk: 'Grass Cloak', desc: 'It melts into the overgrowth and lies in wait, then lunges when you walk past. Rustling gives it away, and a steady torch beam flushes it out.', arrive: 'Something is moving in the tall grass…' },
-  { id: 'book', name: 'The Bookwatcher', icon: '📖', perk: 'Hush', desc: 'While its eyes are open on you, you cannot sprint and your torch gutters. Break line of sight to be free. A steady torch beam snaps its book shut.', arrive: 'Pages are turning somewhere between the shelves…' },
-  { id: 'clown', name: 'Pepe the Clown', icon: '🤡', perk: 'Sticky Fingers', desc: 'He steals an item from your hotbar instead of hurting you, then runs. Shine your torch on him to make him drop it. Listen for the horn.', arrive: 'A horn honks in the dark. Someone is giggling…' }
+  { id: 'grass', name: 'The Grass Monster', perk: 'Grass Cloak' },
+  { id: 'book', name: 'The Bookwatcher', perk: 'Hush' },
+  { id: 'clown', name: 'Pepe the Clown', perk: 'Sticky Fingers' }
 ];
 const RM0 = JSON.parse(JSON.stringify(RM));        // the calm numbers, so the Final Hour (escape.html) can enrage them and put them back
 function roamRage(on) {
@@ -35,16 +36,7 @@ function roamRage(on) {
     RM[id][k] = !on ? b : (k === 'roam' || k === 'lunge' || k === 'stalk' || k === 'chase' || k === 'flee') ? b * 1.3 : (k === 'sight' || k === 'hear' || k === 'near') ? b * 1.5 : k === 'cool' ? b * .5 : b;
   }
 }
-function roamAlert(x, z) {                          // something loud happened over there: the roamer comes to look (carnival fuse box, wrong exit code...)
-  const m = RS.m; if (!m || m.st === 'lunge' || m.st === 'stun' || m.st === 'dizzy') return;
-  const p = rPath(m.x, m.z, x, z); if (!p) return; m.path = p; m.wait = 0; if (m.st === 'lurk' || m.st === 'read') m.st = 'roam'; m.cool = Math.min(m.cool, 2);
-}
-function roamWarp() {                               // the Final Hour is over: it is suddenly close
-  const m = RS.m; if (!m) return; const px = Math.floor(P.x / T), py = Math.floor(P.z / T), bfs = rBFS(px, py, 7), c = [];
-  for (let i = 0; i < bfs.dist.length; i++) if (bfs.dist[i] >= 4) c.push(i);
-  if (!c.length) return; const i = rPick(c); m.x = ((i % GW) + .5) * T; m.z = (((i / GW) | 0) + .5) * T; m.path = null; m.st = m.id === 'book' ? 'watch' : m.id === 'clown' ? 'chase' : 'roam'; m.cool = 0; m.warn = 0; m.stT = 0;
-}
-const RS = { wld: null, lv: -1, m: null, t: 0, card: null, cardT: 0, shown: {} };
+const RS = { wld: null, lv: -1, m: null, t: 0 };
 const rOn = () => typeof CFG === 'undefined' || CFG.scares !== false;
 const rLerp = (a, b, k) => a + (b - a) * k;
 const rPick = (a) => a[(Math.random() * a.length) | 0];
@@ -213,6 +205,78 @@ function buildClown() {                            // baggy suit, huge shoes, ra
   return g;
 }
 
+
+// ================= WHO RUNS IT =================
+// Everybody in a room sees the SAME creature at the SAME place. One player's client (the lowest peer id on the level) runs its brain and publishes its state ~10x a second
+// (presence key "rm"); every other client just draws what the owner publishes and plays the same sounds. Hits are applied by the player who got hit.
+// If the owner leaves or escapes, the next lowest id takes over from where the creature stands. Solo play is simply "owner of one".
+const RN = { myId: 'me', owner: true, ownerId: 'me', seq: 0, evq: [], pubT: 0, evSeen: -1, lastOwner: null, rlT: 0, raq: 0, raSeen: {}, pv: {}, noRm: 0 };
+function rNetPeers() {                             // everyone in this room: [{ id, me, pr }]
+  const out = []; if (typeof net === 'undefined' || !net.r) return out;
+  for (const p of net.r.peers()) { const pr = p.presence; if (!pr || pr.c !== code) continue; out.push({ id: String(p.peer), me: !!p.isMe, pr }); }
+  return out;
+}
+function rElect(peers) {                           // lowest peer id among the players on this level runs the creature
+  const me = peers.find(q => q.me); RN.myId = me ? me.id : (typeof net !== 'undefined' && net.r && net.r.myId ? String(net.r.myId) : 'me');
+  let best = RN.myId; for (const q of peers) if (!q.me && q.pr.rl === LV && q.id < best) best = q.id;
+  RN.ownerId = best; return best === RN.myId;
+}
+function rTargets(peers, dt) {                     // everyone the creature may go after: me and the other players on this level
+  const out = [];
+  if (rOn()) out.push({ id: RN.myId, me: true, x: P.x, z: P.z, yaw: P.yaw, flash: lightOn(), down: P.down > 0, sprint: P.speed > 4.4 });
+  const now = performance.now();
+  for (const q of peers) {
+    if (q.me || q.pr.rl !== LV || q.pr.e === 1 || typeof q.pr.x !== 'number') continue;
+    const pv = RN.pv[q.id] || (RN.pv[q.id] = { x: q.pr.x, z: q.pr.z, t: now, sp: 0 });
+    if (q.pr.x !== pv.x || q.pr.z !== pv.z) { const inst = Math.hypot(q.pr.x - pv.x, q.pr.z - pv.z) / Math.max(.03, (now - pv.t) / 1000); pv.sp = rLerp(pv.sp, inst, .5); pv.x = q.pr.x; pv.z = q.pr.z; pv.t = now; }
+    else if (now - pv.t > 400) pv.sp = 0;
+    out.push({ id: q.id, me: false, x: q.pr.x, z: q.pr.z, yaw: q.pr.ry || 0, flash: (q.pr.f || 0) > .3, down: false, sprint: pv.sp > 4.4 });
+  }
+  return out;
+}
+function rNearest(TS, m) { let b = null, bd = 1e9; for (const t of TS) { if (t.down) continue; const d = Math.hypot(t.x - m.x, t.z - m.z); if (d < bd) { bd = d; b = t; } } return b; }
+
+// ================= events: sounds and hits that everyone must get =================
+const rDistMe = (m) => Math.hypot(P.x - m.x, P.z - m.z);
+function rEmit(m, kind, to, arg) {                 // owner: tell everyone (and do it here too)
+  const e = [++RN.seq, kind, to || 0, arg || 0]; RN.evq.push(e); if (RN.evq.length > 8) RN.evq.shift(); rApplyEv(m, e);
+}
+function rApplyEv(m, e) {                          // everyone: play it
+  const kind = e[1], to = e[2], arg = e[3], d = rDistMe(m), v = rVol(d, 30);
+  if (!rOn() && kind !== 'drop' && kind !== 'pocket') return;
+  if (kind === 'roar') { Aud.burst(180, .45, .3 * v, .6); Aud.tone(120, 60, .45, .18 * v, 'sawtooth'); if (d < 9) Scare.shake = Math.max(Scare.shake, .3); }
+  else if (kind === 'shriek') { Aud.tone(240, 90, .6, .14 * v, 'sawtooth'); if (d < 14) { Aud.stinger(.5 * v); } }
+  else if (kind === 'hum') { Aud.soft(110, 96, 1.6, .06 * v); Aud.burst(3200, .14, .06 * v, .7); }
+  else if (kind === 'slam') Aud.burst(220, .3, .35 * v, .8);
+  else if (kind === 'recoil') { Aud.burst(260, .25, .3 * v, .8); Aud.tone(180, 70, .4, .12 * v, 'sawtooth'); }
+  else if (kind === 'honk') rHonk(v);
+  else if (kind === 'giggle') rGiggle(v);
+  else if (kind === 'dizzy') { Aud.tone(300, 120, .4, .12 * v, 'sawtooth'); rHonk(v); }
+  else if (kind === 'hit') { if (to === RN.myId) rApplyHit(m, arg, e[0]); }
+  else if (kind === 'drop') { if (to === RN.myId && typeof itemAdd === 'function') { const it = ITEM.types[arg]; itemAdd(arg); toast('The clown dropped your ' + (it ? it.name : 'item') + '!'); } }
+  else if (kind === 'pocket') { if (to === RN.myId) { const it = ITEM.types[arg]; toast('The clown pocketed your ' + (it ? it.name : 'item') + ' for good.'); } }
+}
+function rApplyHit(m, kind, seq) {                 // I am the one who got hit
+  if (!rOn() || P.escaped) return;
+  if (kind === 'grass') { Aud.stinger(.8); scareFlash(true); Scare.shake = 1; P.stam = Math.max(0, P.stam - 45); damagePlayer(RM.grass.dmg); }
+  else if (kind === 'book') { Aud.stinger(.7); scareFlash(true); Scare.shake = .9; P.flickT = 2.2; damagePlayer(RM.book.dmg); }
+  else {                                           // the clown: steal an item, or a pie in the face when there is nothing to take
+    const it = rSteal();
+    if (it) { toast('The clown stole your ' + ITEM.types[it].name + '! Shine your torch on him to get it back.'); Aud.stinger(.4); }
+    else { toast('A pie to the face.'); damagePlayer(RM.clown.pieDmg); P.flickT = 2.5; }
+    scareFlash(false); Scare.shake = .5;
+    if (RN.owner) { if (m.pend && m.pend.q === seq) { m.loot = it || null; m.victim = RN.myId; m.pend = null; if (!it) m.stT = Math.min(m.stT, 7); } }
+    else if (typeof net !== 'undefined' && net.r) net.set({ rr: { q: seq, t: it || 0 } });                       // tell the owner what I lost
+  }
+}
+function rSteal() {                                // takes one thing from a random hotbar slot (or null)
+  const have = []; INV.slots.forEach((s, i) => { if (s) have.push(i); });
+  if (!have.length) return null;
+  const i = rPick(have), s = INV.slots[i], t = s.t; if (--s.n <= 0) INV.slots[i] = null; itemsHud(); return t;
+}
+const rHonk = (v) => { if (v > .01) { Aud.tone(390, 330, .22, .13 * v, 'sawtooth'); Aud.tone(195, 165, .22, .08 * v, 'square'); } };
+const rGiggle = (v) => { if (v > .01) for (let i = 0; i < 5; i++) setTimeout(() => Aud.tone(640 + i * 70 + Math.random() * 40, 520 + i * 30, .07, .06 * v, 'triangle'), i * 85); };
+
 // ================= spawning / bookkeeping =================
 function rKill() {
   const m = RS.m; if (!m) return;
@@ -220,129 +284,128 @@ function rKill() {
   if (m.light) DYN.delete(m.light);
   RS.m = null;
 }
+function rPubLevel(lv) { if (typeof net !== 'undefined' && net.r) net.set({ rl: lv }); }
 function rBuild() {                                // a new level just started: forget the old roamer and schedule the new one
   rKill(); roamRage(false); RS.wld = world; RS.lv = LV; RS.t = (RM[RT[LV] ? RT[LV].id : 'grass'] || RM.grass).delay;
+  RN.seq = 0; RN.evq = []; RN.evSeen = -1; RN.lastOwner = null; RN.pv = {}; RN.noRm = 0; RN.rlT = 0;
+  if (typeof net !== 'undefined' && net.r) net.set({ rl: LV, rm: 0 });
+}
+function rMake(x, z) {                             // the body, the light and the brain state (used by the owner and by everyone who just draws it)
+  const ty = RT[LV]; if (!ty) return null;
+  const av = ty.id === 'grass' ? buildGrass() : ty.id === 'book' ? buildBook() : buildClown();
+  av.position.set(x, 0, z); scene.add(av);
+  const col = ty.id === 'grass' ? 0x9bff7a : ty.id === 'book' ? 0xffc27a : 0xff7ab0;
+  const light = { x, y: 1.5, z, col, int: ty.id === 'grass' ? .12 : .35, d: 5.5, fl: .3, ph: Math.random() * 9, w: 1 }; DYN.add(light);
+  const m = { ty, id: ty.id, av, light, x, z, ry: Math.random() * 6.28, st: 'roam', stT: 0, path: null, pathT: 0, hx: 0, hz: -1, moving: false,
+    cloak: 0, cool: 6, beam: 0, beamBy: null, vis: 0, honkT: rRange(RM.clown.honk), rustT: 0, pgT: 0, losT: 0, warn: 0, loot: null, victim: null, pend: null, lungeT: 0, wait: 0, born: Math.random() * 9 };
+  RS.m = m; m.av.visible = rOn(); return m;
 }
 function rSpawn(force) {
-  const ty = RT[LV]; if (!ty) return false;
   const spot = rFar(force ? 6 : 16, force ? 18 : 40); if (!spot) { RS.t = 6; return false; }
-  const av = ty.id === 'grass' ? buildGrass() : ty.id === 'book' ? buildBook() : buildClown();
-  av.position.set(spot.x, 0, spot.z); scene.add(av);
-  const col = ty.id === 'grass' ? 0x9bff7a : ty.id === 'book' ? 0xffc27a : 0xff7ab0;
-  const light = { x: spot.x, y: 1.5, z: spot.z, col, int: ty.id === 'grass' ? .12 : .35, d: 5.5, fl: .3, ph: Math.random() * 9, w: 1 }; DYN.add(light);
-  const m = { ty, id: ty.id, av, light, x: spot.x, z: spot.z, ry: Math.random() * 6.28, st: 'roam', stT: 0, path: null, pathT: 0, hx: 0, hz: -1, moving: false,
-    cloak: 0, cool: 6, beam: 0, vis: 0, honkT: rRange(RM.clown.honk), rustT: 0, hush: 0, seenT: 0, losT: 0, warn: 0, loot: null, lootT: 0, lungeT: 0, wait: 0, hushToast: false, born: Math.random() * 9 };
-  RS.m = m; m.av.visible = true; return true;
-}
-function rCard(ty) {                               // one-time "meet the roamer" card with its perk
-  if (RS.shown[ty.id]) return; RS.shown[ty.id] = 1;
-  if (!RS.card) {
-    const d = document.createElement('div');
-    d.style.cssText = 'position:fixed;left:50%;top:15%;transform:translateX(-50%);max-width:min(420px,86vw);padding:12px 18px;border-radius:12px;background:rgba(10,12,10,.82);border:1px solid rgba(255,255,255,.18);color:#e8efe6;font:500 14px/1.4 Inter,system-ui,sans-serif;text-align:center;z-index:13;pointer-events:none;opacity:0;transition:opacity .6s;box-shadow:0 6px 30px rgba(0,0,0,.5)';
-    document.body.appendChild(d); RS.card = d;
-  }
-  RS.card.innerHTML = '<div style="font-size:12px;letter-spacing:.14em;opacity:.65">ROAMING THIS LEVEL</div><div style="font-size:19px;font-weight:700;margin:3px 0">' + ty.icon + ' ' + ty.name + '</div><div style="color:#ffc27a;font-weight:600">Perk: ' + ty.perk + '</div><div style="opacity:.85;font-size:13px;margin-top:2px">' + ty.desc + '</div>';
-  RS.card.style.opacity = 1; RS.cardT = 9;
+  return !!rMake(spot.x, spot.z);
 }
 
 // ================= shared senses =================
-function rSense(m) {
-  const dx = P.x - m.x, dz = P.z - m.z, dist = Math.hypot(dx, dz), los = mimicLOS(m.x, m.z, P.x, P.z);
-  const fw = { x: -Math.sin(m.ry), z: -Math.cos(m.ry) }, face = dist > .01 ? (dx * fw.x + dz * fw.z) / dist : 1;           // 1 = it is looking straight at you
-  const cosA = dist > .01 ? (-dx * -Math.sin(P.yaw) - dz * -Math.cos(P.yaw)) / dist : 1;                                    // 1 = you are looking straight at it
-  return { dx, dz, dist, los, face, cosA, down: P.down > 0 };
+function rSenseT(m, tg) {                          // what the creature perceives about the player it is dealing with
+  if (!tg) return { dx: 0, dz: 0, dist: 999, los: false, face: 0, down: true, tg: null };
+  const dx = tg.x - m.x, dz = tg.z - m.z, dist = Math.hypot(dx, dz), los = mimicLOS(m.x, m.z, tg.x, tg.z);
+  const fw = { x: -Math.sin(m.ry), z: -Math.cos(m.ry) }, face = dist > .01 ? (dx * fw.x + dz * fw.z) / dist : 1;           // 1 = it is looking straight at them
+  return { dx, dz, dist, los, face, down: tg.down, tg };
 }
-function rBeam(m, c, S, D, dt) {                   // is your torch steadily on it? (accumulates m.beam seconds)
-  const on = lightOn() && c.los && c.dist < D && c.cosA > .94;
-  m.beam = on ? m.beam + dt : Math.max(0, m.beam - dt * .8); return m.beam > S;
+function rBeamAny(m, TS, S, D, dt) {               // is ANY player's torch steadily on it? (accumulates m.beam seconds, remembers who)
+  let on = false, by = null;
+  for (const t of TS) {
+    if (!t.flash || t.down) continue; const dx = m.x - t.x, dz = m.z - t.z, d = Math.hypot(dx, dz); if (d > D || d < .01) continue;
+    if ((dx * -Math.sin(t.yaw) + dz * -Math.cos(t.yaw)) / d > .94 && mimicLOS(m.x, m.z, t.x, t.z)) { on = true; by = t.id; break; }
+  }
+  m.beam = on ? m.beam + dt : Math.max(0, m.beam - dt * .8); m.beamBy = by; return m.beam > S;
 }
 function rTurn(m, dt, target, k) { m.ry += angDiff(m.ry, target) * (1 - Math.exp(-(k || 7) * dt)); }
 
 // ================= THE GRASS MONSTER =================
-function updGrass(m, dt, t, c) {
-  const R = RM.grass; m.cool = Math.max(0, m.cool - dt);
-  let sp = 0, cloakT = .55;
+function aiGrass(m, dt, t, c, TS) {
+  const R = RM.grass; m.cool = Math.max(0, m.cool - dt); const tg = c.tg;
+  let sp = 0;
   if (m.st === 'roam') {
-    sp = R.roam; cloakT = .6;
+    sp = R.roam;
     if (!m.path || !m.path.length) { m.wait -= dt; sp = 0; if (m.wait <= 0) { m.path = rWander(m, 7, 22, (x, z) => { const tp = tileType(x, z); return tp === 3 || tp === 4 ? .5 : 0; }); m.wait = 1 + Math.random() * 2; if (!m.path || !m.path.length) { m.st = 'lurk'; m.stT = rRange(R.lurk); } } }
     else if (m.path.length < 2 && Math.random() < dt * .25) { m.st = 'lurk'; m.stT = rRange(R.lurk); }
-    if (c.los && c.dist < R.sight && !c.down && m.cool <= 0 && Math.random() < dt * 1.5) { m.st = 'lunge'; m.lungeT = 0; Aud.burst(180, .45, .28 * rVol(c.dist), .6); Aud.tone(120, 60, .45, .16 * rVol(c.dist), 'sawtooth'); }
+    if (c.los && c.dist < R.sight && !c.down && m.cool <= 0 && Math.random() < dt * 1.5) { m.st = 'lunge'; m.lungeT = 0; rEmit(m, 'roar'); }
   } else if (m.st === 'lurk') {
-    cloakT = 1; m.stT -= dt;
-    if (c.los && c.dist < R.sight && !c.down && m.cool <= 0) { m.st = 'lunge'; m.lungeT = 0; Aud.burst(180, .45, .3 * rVol(c.dist), .6); Aud.tone(120, 60, .45, .18 * rVol(c.dist), 'sawtooth'); Scare.shake = Math.max(Scare.shake, .3); }
+    m.stT -= dt;
+    if (c.los && c.dist < R.sight && !c.down && m.cool <= 0) { m.st = 'lunge'; m.lungeT = 0; rEmit(m, 'roar'); }
     else if (m.stT <= 0) { m.st = 'roam'; m.path = null; m.wait = 0; }
   } else if (m.st === 'lunge') {
-    cloakT = 0; m.lungeT += dt; sp = 0;
-    if (rClear(m.x, m.z, P.x, P.z)) rDirect(m, dt, R.lunge, P.x, P.z);
-    else { m.pathT -= dt; if (m.pathT <= 0) { m.pathT = .4; m.path = rPath(m.x, m.z, P.x, P.z); } rFollow(m, dt, R.lunge * .85); }
-    if (c.dist < R.bite) { Aud.stinger(.8); scareFlash(true); Scare.shake = 1; P.stam = Math.max(0, P.stam - 45); damagePlayer(R.dmg); toast('The grass bit back.'); m.st = 'flee'; m.stT = 6; m.cool = R.cool; m.path = rWander(m, 8, 20); }
-    else if (m.lungeT > R.lungeS || c.dist > R.sight * 2.2) { m.st = 'roam'; m.cool = R.cool * .6; m.path = null; m.wait = 0; }
+    if (!tg) { m.st = 'roam'; m.path = null; }
+    else {
+      m.lungeT += dt;
+      if (rClear(m.x, m.z, tg.x, tg.z)) rDirect(m, dt, R.lunge, tg.x, tg.z);
+      else { m.pathT -= dt; if (m.pathT <= 0) { m.pathT = .4; m.path = rPath(m.x, m.z, tg.x, tg.z); } rFollow(m, dt, R.lunge * .85); }
+      if (c.dist < R.bite) { rEmit(m, 'hit', tg.id, 'grass'); m.st = 'flee'; m.stT = 6; m.cool = R.cool; m.path = rWander(m, 8, 20); }
+      else if (m.lungeT > R.lungeS || c.dist > R.sight * 2.2) { m.st = 'roam'; m.cool = R.cool * .6; m.path = null; m.wait = 0; }
+    }
   } else if (m.st === 'flee') {
-    cloakT = 0; m.stT -= dt; sp = 3.4; if (!m.path || !m.path.length) m.path = rWander(m, 8, 20);
+    m.stT -= dt; sp = 3.4; if (!m.path || !m.path.length) m.path = rWander(m, 8, 20);
     if (m.stT <= 0) { m.st = 'roam'; m.path = null; m.wait = 0; }
   }
-  // your torch flushes it out of hiding
-  if ((m.st === 'lurk' || m.st === 'roam') && rBeam(m, c, R.beamS, R.beamD, dt)) {
-    m.st = 'flee'; m.stT = 7; m.cool = R.cool; m.beam = 0; m.path = rWander(m, 8, 20); Aud.stinger(.5); Aud.tone(240, 90, .6, .14 * rVol(c.dist), 'sawtooth'); scareFlash(false); toast('The grass monster shrieks and bolts from the light.');
-  }
+  // anybody's torch flushes it out of hiding
+  if ((m.st === 'lurk' || m.st === 'roam') && rBeamAny(m, TS, R.beamS, R.beamD, dt)) { m.st = 'flee'; m.stT = 7; m.cool = R.cool; m.beam = 0; m.path = rWander(m, 8, 20); rEmit(m, 'shriek'); }
   if (m.st !== 'lunge') rFollow(m, dt, sp);
+  if (m.moving) rTurn(m, dt, Math.atan2(-m.hx, -m.hz), 6);
+}
+function poseGrass(m, dt, t, dist) {
+  const cloakT = m.st === 'lurk' ? 1 : m.st === 'roam' ? .6 : 0;
   m.cloak = rLerp(m.cloak, cloakT, 1 - Math.exp(-3 * dt));
-  if (m.moving) { m.rustT -= dt; if (m.rustT <= 0) { m.rustT = m.st === 'lunge' ? .14 : .4; Aud.burst(1600, .16, .09 * rVol(c.dist, 24), .5); } }
-  // pose
+  if (m.moving) { m.rustT -= dt; if (m.rustT <= 0) { m.rustT = m.st === 'lunge' ? .14 : .4; Aud.burst(1600, .16, .09 * rVol(dist, 24), .5); } }
   const u = m.av.userData, cl = m.cloak, sw = m.moving ? (m.st === 'lunge' ? 9 : 4) : 1.3, s = Math.sin(t * sw);
   u.body.scale.set(1 + cl * .2, rLerp(1, .5, cl), 1 + cl * .2); u.body.position.y = -cl * .05 + (m.moving ? Math.abs(s) * .06 : 0);
   u.arms[0].rotation.x = u.arms[1].rotation.x = m.st === 'lunge' ? -1.5 : -.5 + (m.moving ? s * .35 : 0);
   u.legs[0].rotation.x = m.moving ? s * .6 : 0; u.legs[1].rotation.x = m.moving ? -s * .6 : 0;
   u.blades.forEach(b => { b.rotation.z = b.userData.rz + Math.sin(t * 1.6 + b.userData.ph) * .12; });
   const o = rLerp(1, .22, cl); u.fade.forEach(mt => { mt.opacity = o; });
-  u.eyes.visible = c.dist < 12 || m.cloak < .5; u.eyes.scale.setScalar(m.cloak > .5 ? (Math.sin(t * 1.7 + m.born) > .85 ? .15 : .8) : 1);
+  u.eyes.visible = dist < 12 || m.cloak < .5; u.eyes.scale.setScalar(m.cloak > .5 ? (Math.sin(t * 1.7 + m.born) > .85 ? .15 : .8) : 1);
   m.light.int = (.12 + (1 - cl) * .18);
 }
 
 // ================= THE BOOKWATCHER =================
-function updBook(m, dt, t, c) {
-  const R = RM.book; m.cool = Math.max(0, m.cool - dt);
-  let sp = 0, eyes = 0, watching = false;
+function aiBook(m, dt, t, c, TS) {
+  const R = RM.book; m.cool = Math.max(0, m.cool - dt); const tg = c.tg;
+  let sp = 0;
   const sees = !c.down && c.los && ((c.dist < R.near) || (c.dist < R.sight && c.face > .35 && m.st !== 'read'));
   if (m.st === 'roam') {
     sp = R.roam; if (!m.path || !m.path.length) { m.path = rWander(m, 6, 24); m.wait = rRange(R.read); if (!m.path || !m.path.length) { m.st = 'read'; m.stT = rRange(R.read); } }
     else if (m.path.length < 1.5 && Math.random() < dt * .3) { m.st = 'read'; m.stT = rRange(R.read); }
-    if (sees && m.cool <= 0) { m.st = 'watch'; m.warn = 0; Aud.soft(110, 96, 1.6, .06 * rVol(c.dist)); Aud.burst(3200, .14, .06 * rVol(c.dist), .7); }
+    if (sees && m.cool <= 0) { m.st = 'watch'; m.warn = 0; rEmit(m, 'hum'); }
   } else if (m.st === 'read') {
     m.stT -= dt; if (m.stT <= 0) { m.st = 'roam'; m.path = null; }
-    else { m.pgT = (m.pgT || 0) - dt; if (m.pgT <= 0) { m.pgT = 1.2 + Math.random() * 2; Aud.burst(3200, .1, .035 * rVol(c.dist, 22), .7); } }
-    if (sees && c.dist < R.near && m.cool <= 0) { m.st = 'watch'; m.warn = 0; Aud.soft(110, 96, 1.6, .06 * rVol(c.dist)); }
+    if (sees && c.dist < R.near && m.cool <= 0) { m.st = 'watch'; m.warn = 0; rEmit(m, 'hum'); }
   } else if (m.st === 'watch') {                   // eyes snap open: a moment of warning, then it comes for you
-    eyes = 1; watching = true; m.warn += dt; rTurn(m, dt, Math.atan2(-c.dx, -c.dz), 9);
-    if (m.warn > R.warn) { m.st = 'stalk'; m.losT = 0; toast('The Bookwatcher sees you.'); }
+    m.warn += dt; if (tg) rTurn(m, dt, Math.atan2(-c.dx, -c.dz), 9);
+    if (m.warn > R.warn) { m.st = 'stalk'; m.losT = 0; }
     if (!c.los) { m.st = 'roam'; m.path = null; }
   } else if (m.st === 'stalk') {
-    eyes = 1; watching = c.los && c.dist < R.hushD; sp = R.stalk;
-    m.losT = c.los ? 0 : m.losT + dt; if (m.losT > R.lose || c.down) { m.st = 'roam'; m.path = null; m.cool = 6; }
-    m.pathT -= dt; if (m.pathT <= 0) { m.pathT = .45; m.path = rPath(m.x, m.z, P.x, P.z); }
-    if (rClear(m.x, m.z, P.x, P.z) && c.dist < 6) { rDirect(m, dt, sp, P.x, P.z); sp = 0; }
-    if (c.dist < R.bite) { Aud.stinger(.7); Aud.burst(220, .3, .35, .8); scareFlash(true); Scare.shake = .9; P.flickT = 2.2; damagePlayer(R.dmg); toast('A page cut deep.'); m.st = 'cool'; m.stT = R.cool; m.cool = R.cool; m.path = rWander(m, 10, 24); }
+    sp = R.stalk; m.losT = c.los ? 0 : m.losT + dt; if (m.losT > R.lose || c.down || !tg) { m.st = 'roam'; m.path = null; m.cool = 6; }
+    else {
+      m.pathT -= dt; if (m.pathT <= 0) { m.pathT = .45; m.path = rPath(m.x, m.z, tg.x, tg.z); }
+      if (rClear(m.x, m.z, tg.x, tg.z) && c.dist < 6) { rDirect(m, dt, sp, tg.x, tg.z); sp = 0; }
+      if (c.dist < R.bite) { rEmit(m, 'slam'); rEmit(m, 'hit', tg.id, 'book'); m.st = 'cool'; m.stT = R.cool; m.cool = R.cool; m.path = rWander(m, 10, 24); }
+    }
   } else if (m.st === 'cool') {                    // book slams shut: it drifts away and goes back to reading
     m.stT -= dt; sp = R.roam * 1.4; if (!m.path || !m.path.length) m.path = rWander(m, 8, 24);
     if (m.stT <= 0) { m.st = 'roam'; m.path = null; }
   } else if (m.st === 'stun') {
     m.stT -= dt; if (m.stT <= 0) { m.st = 'read'; m.stT = rRange(R.read); }
   }
-  // a steady torch beam while its eyes are open snaps the book shut
-  if ((m.st === 'watch' || m.st === 'stalk') && rBeam(m, c, R.beamS, R.beamD, dt)) {
-    m.st = 'stun'; m.stT = 4; m.cool = R.cool; m.beam = 0; Aud.burst(260, .25, .3 * rVol(c.dist), .8); Aud.tone(180, 70, .4, .12 * rVol(c.dist), 'sawtooth'); toast('The Bookwatcher recoils from the light.');
-  }
-  // Hush: it silences you while its eyes are on you
-  if (watching && c.los && !c.down) {
-    P.exh = true; P.stam = Math.min(P.stam, 25);
-    if (Math.random() < dt * 1.4) P.flickT = Math.max(P.flickT, .16);
-    m.hush += dt; if (m.hush > 1 && !m.hushToast) { m.hushToast = true; toast('Hush… its gaze weighs on you. Break line of sight.'); }
-  } else m.hush = Math.max(0, m.hush - dt);
+  // a steady torch beam (anyone's) while its eyes are open snaps the book shut
+  if ((m.st === 'watch' || m.st === 'stalk') && rBeamAny(m, TS, R.beamS, R.beamD, dt)) { m.st = 'stun'; m.stT = 4; m.cool = R.cool; m.beam = 0; rEmit(m, 'recoil'); }
   rFollow(m, dt, sp);
-  if (m.st !== 'watch') { if (m.moving) rTurn(m, dt, Math.atan2(-m.hx, -m.hz), 5); else if (m.st === 'stalk') rTurn(m, dt, Math.atan2(-c.dx, -c.dz), 6); }
-  // pose: it hovers, pages orbit, eyes blink open
-  const u = m.av.userData;
+  if (m.st !== 'watch') { if (m.moving) rTurn(m, dt, Math.atan2(-m.hx, -m.hz), 5); else if (m.st === 'stalk' && tg) rTurn(m, dt, Math.atan2(-c.dx, -c.dz), 6); }
+}
+function poseBook(m, dt, t, dist) {
+  const eyes = (m.st === 'watch' || m.st === 'stalk') ? 1 : 0;
   m.vis = rLerp(m.vis, eyes, 1 - Math.exp(-(eyes ? 10 : 4) * dt));
+  if (m.st === 'read') { m.pgT -= dt; if (m.pgT <= 0) { m.pgT = 1.2 + Math.random() * 2; Aud.burst(3200, .1, .035 * rVol(dist, 22), .7); } }
+  const u = m.av.userData;
   u.body.position.y = .18 + Math.sin(t * 1.4 + m.born) * .07; u.body.rotation.z = m.moving ? Math.sin(t * 2) * .03 : 0;
   u.bk.rotation.x = m.st === 'stun' || m.st === 'cool' ? -.7 : (m.st === 'read' ? .35 : 0);
   u.leaves.forEach((lf, i) => { lf.rotation.y = (i ? 1 : -1) * (m.st === 'stun' || m.st === 'cool' ? .08 : .38 + Math.sin(t * 1.8) * .02); });
@@ -351,81 +414,133 @@ function updBook(m, dt, t, c) {
   u.pages.forEach(p => { const d = p.userData; d.a += dt * d.sp * (m.st === 'stalk' ? 3 : 1); p.position.set(Math.cos(d.a) * d.r, d.h + Math.sin(d.a * 2) * .12, Math.sin(d.a) * d.r); p.rotation.set(Math.sin(d.a) * .6, d.a, Math.cos(d.a * 1.3) * .5); });
   m.light.int = .22 + m.vis * .25;
 }
+function fxBook(m, dt) {                           // HUSH: while its eyes are open on ME, I can't sprint and my torch gutters (everyone feels it for themselves)
+  if (!rOn() || P.down > 0) return;
+  const R = RM.book, d = rDistMe(m);
+  if ((m.st === 'watch' || m.st === 'stalk') && d < R.hushD && mimicLOS(m.x, m.z, P.x, P.z)) { P.exh = true; P.stam = Math.min(P.stam, 25); if (Math.random() < dt * 1.4) P.flickT = Math.max(P.flickT, .16); }
+}
 
 // ================= PEPE THE CLOWN =================
-function rHonk(m, c) { const v = rVol(c.dist, 34); if (v > .01) { Aud.tone(390, 330, .22, .13 * v, 'sawtooth'); Aud.tone(195, 165, .22, .08 * v, 'square'); } }
-function rGiggle(m, c) { const v = rVol(c.dist, 30); if (v <= .01) return; for (let i = 0; i < 5; i++) setTimeout(() => Aud.tone(640 + i * 70 + Math.random() * 40, 520 + i * 30, .07, .06 * v, 'triangle'), i * 85); }
-function rSteal() {                                // takes one thing from a random hotbar slot (or null)
-  const have = []; INV.slots.forEach((s, i) => { if (s) have.push(i); });
-  if (!have.length) return null;
-  const i = rPick(have), s = INV.slots[i], t = s.t; if (--s.n <= 0) INV.slots[i] = null; itemsHud(); return t;
-}
-function updClown(m, dt, t, c) {
-  const R = RM.clown; m.cool = Math.max(0, m.cool - dt);
-  let sp = 0, anim = 0;
-  m.honkT -= dt; if (m.honkT <= 0) { m.honkT = rRange(R.honk) * (m.st === 'chase' ? .5 : 1); rHonk(m, c); if (Math.random() < .5) setTimeout(() => rGiggle(m, c), 320); }
-  const hears = !c.down && c.dist < R.hear && P.speed > 4.4, sees = !c.down && c.los && c.dist < R.sight;
+function aiClown(m, dt, t, c, TS, peers) {
+  const R = RM.clown; m.cool = Math.max(0, m.cool - dt); const tg = c.tg;
+  let sp = 0;
+  m.honkT -= dt; if (m.honkT <= 0) { m.honkT = rRange(R.honk) * (m.st === 'chase' ? .5 : 1); rEmit(m, 'honk'); if (Math.random() < .5) rEmit(m, 'giggle'); }
+  const hears = tg && !c.down && c.dist < R.hear && tg.sprint, sees = tg && !c.down && c.los && c.dist < R.sight;
   if (m.st === 'roam') {
     sp = R.roam; if (!m.path || !m.path.length) { m.wait -= dt; sp = 0; if (m.wait <= 0) { m.path = rWander(m, 8, 26); m.wait = .5 + Math.random() * 2.5; } }
-    if ((sees || hears) && m.cool <= 0) { m.st = 'chase'; m.stT = 0; rGiggle(m, c); }
+    if ((sees || hears) && m.cool <= 0) { m.st = 'chase'; m.stT = 0; rEmit(m, 'giggle'); }
   } else if (m.st === 'chase') {
-    sp = R.chase; m.stT += dt; anim = 1;
-    m.pathT -= dt; if (m.pathT <= 0) { m.pathT = .45; m.path = rPath(m.x, m.z, P.x, P.z); }
-    if (rClear(m.x, m.z, P.x, P.z) && c.dist < 7) { rDirect(m, dt, sp, P.x, P.z); sp = 0; }
-    if (c.down) { m.st = 'roam'; m.path = null; }
-    else if ((!c.los && m.stT > 14) || c.dist > 45) { m.st = 'roam'; m.path = null; m.cool = 8; }
-    if (c.dist < R.bite) {
-      const it = rSteal();
-      if (it) { m.loot = it; m.lootT = R.loot; const d = ITEM.types[it]; toast('Pepe stole your ' + d.name + '! Shine your torch on him to get it back.'); m.av.userData.loot.material.color.setHex(d.col); Aud.stinger(.4); }
-      else { toast('A pie to the face. Pepe thinks that’s hilarious.'); damagePlayer(R.pieDmg); P.flickT = 2.5; }
-      scareFlash(false); Scare.shake = .5; rGiggle(m, c); rHonk(m, c);
-      m.st = 'flee'; m.stT = it ? R.loot : 7; m.cool = R.cool; m.beam = 0; m.path = rWander(m, 12, 30);
+    sp = R.chase; m.stT += dt;
+    if (!tg || c.down) { m.st = 'roam'; m.path = null; }
+    else {
+      m.pathT -= dt; if (m.pathT <= 0) { m.pathT = .45; m.path = rPath(m.x, m.z, tg.x, tg.z); }
+      if (rClear(m.x, m.z, tg.x, tg.z) && c.dist < 7) { rDirect(m, dt, sp, tg.x, tg.z); sp = 0; }
+      if ((!c.los && m.stT > 14) || c.dist > 45) { m.st = 'roam'; m.path = null; m.cool = 8; }
+      if (c.dist < R.bite) {                       // got them: steal (the victim tells us what they lost) and run
+        m.st = 'flee'; m.stT = R.loot; m.cool = R.cool; m.beam = 0; m.victim = tg.id; m.loot = null; m.path = rWander(m, 12, 30);
+        m.pend = tg.me ? { q: RN.seq + 1 } : { q: RN.seq + 1, until: t + 2.5, to: tg.id };
+        rEmit(m, 'hit', tg.id, 'clown'); rEmit(m, 'giggle'); rEmit(m, 'honk');
+      }
     }
   } else if (m.st === 'flee') {
-    sp = R.flee; anim = 1; m.stT -= dt; if (!m.path || !m.path.length) m.path = rWander(m, 12, 30);
-    if (m.loot && rBeam(m, c, R.beamS, R.beamD, dt)) {   // a steady beam makes him fumble the loot
-      const d = ITEM.types[m.loot]; if (itemAdd(m.loot)) toast('Pepe dropped your ' + d.name + '!'); else toast('Pepe dropped your ' + d.name + ' — but your hotbar is full.');
-      m.loot = null; m.beam = 0; m.st = 'dizzy'; m.stT = 3; Aud.tone(300, 120, .4, .12 * rVol(c.dist), 'sawtooth'); rHonk(m, c);
-    } else if (m.stT <= 0) { if (m.loot) toast('Pepe pocketed your ' + ITEM.types[m.loot].name + ' for good.'); m.loot = null; m.st = 'roam'; m.path = null; m.wait = 0; }
+    sp = R.flee; m.stT -= dt; if (!m.path || !m.path.length) m.path = rWander(m, 12, 30);
+    if (m.loot && rBeamAny(m, TS, R.beamS, R.beamD, dt)) {          // anybody's steady beam makes him fumble the loot back to its owner
+      rEmit(m, 'drop', m.victim, m.loot); m.loot = null; m.beam = 0; m.st = 'dizzy'; m.stT = 3; rEmit(m, 'dizzy');
+    } else if (m.stT <= 0) { if (m.loot) rEmit(m, 'pocket', m.victim, m.loot); m.loot = null; m.st = 'roam'; m.path = null; m.wait = 0; }
   } else if (m.st === 'dizzy') {
     m.stT -= dt; if (m.stT <= 0) { m.st = 'roam'; m.path = null; m.wait = 0; }
   }
+  // waiting to hear back from a teammate who got robbed
+  if (m.pend && m.pend.to) {
+    const q = peers.find(x => x.id === m.pend.to), rr = q && q.pr.rr;
+    if (rr && rr.q === m.pend.q) { m.loot = rr.t || null; if (!rr.t) m.stT = Math.min(m.stT, 7); m.pend = null; }
+    else if (t > m.pend.until) m.pend = null;
+  }
   rFollow(m, dt, sp);
-  if (m.moving) rTurn(m, dt, Math.atan2(-m.hx, -m.hz), 8); else if (m.st === 'chase') rTurn(m, dt, Math.atan2(-c.dx, -c.dz), 8);
-  // pose: skipping, balloons bobbing, juggled loot floating over his head
-  const u = m.av.userData, sw = t * (m.moving ? (anim ? 11 : 7) : 2), s = Math.sin(sw);
+  if (m.moving) rTurn(m, dt, Math.atan2(-m.hx, -m.hz), 8); else if (m.st === 'chase' && tg) rTurn(m, dt, Math.atan2(-c.dx, -c.dz), 8);
+}
+function poseClown(m, dt, t, dist) {
+  const anim = (m.st === 'chase' || m.st === 'flee') ? 1 : 0, u = m.av.userData, sw = t * (m.moving ? (anim ? 11 : 7) : 2), s = Math.sin(sw);
   u.body.position.y = m.moving ? Math.abs(Math.sin(sw)) * .16 : 0; u.body.rotation.z = m.st === 'dizzy' ? Math.sin(t * 9) * .25 : (m.moving ? s * .06 : 0);
   u.legs[0].rotation.x = m.moving ? s * .8 : 0; u.legs[1].rotation.x = m.moving ? -s * .8 : 0;
   u.arms[0].rotation.x = m.moving ? -s * .6 : 0; u.arms[1].rotation.x = anim ? -1.2 + Math.sin(t * 14) * .2 : (m.moving ? s * .6 : 0);
   u.head.rotation.z = Math.sin(t * 1.3) * .12; u.head.rotation.x = m.st === 'dizzy' ? .3 : 0;
   u.balls.forEach(b => { b.position.y += Math.sin(t * 1.5 + b.userData.ph) * .0015; });
   u.bal.rotation.z = Math.sin(t * 1.2) * .08;
-  u.loot.visible = !!m.loot; if (m.loot) { u.loot.position.set(Math.cos(t * 4) * .35, 2.65 + Math.sin(t * 6) * .12, Math.sin(t * 4) * .35); u.loot.rotation.y = t * 5; }
+  u.loot.visible = !!m.loot; if (m.loot) { const d = ITEM.types[m.loot]; if (d && m.lootShown !== m.loot) { u.loot.material.color.setHex(d.col); m.lootShown = m.loot; } u.loot.position.set(Math.cos(t * 4) * .35, 2.65 + Math.sin(t * 6) * .12, Math.sin(t * 4) * .35); u.loot.rotation.y = t * 5; }
   m.light.int = m.loot ? .5 : .3;
+}
+
+// ================= forwarding: loud things anywhere reach the owner's creature =================
+function rAlertLocal(x, z) {
+  const m = RS.m; if (!m || m.st === 'lunge' || m.st === 'stun' || m.st === 'dizzy') return;
+  const p = rPath(m.x, m.z, x, z); if (!p) return; m.path = p; m.wait = 0; if (m.st === 'lurk' || m.st === 'read') m.st = 'roam'; m.cool = Math.min(m.cool, 2);
+}
+function roamAlert(x, z) {                         // something loud happened over there (fuse box, wrong exit code...): the creature comes to look
+  if (RN.owner) rAlertLocal(x, z); else if (typeof net !== 'undefined' && net.r) net.set({ ra: { q: ++RN.raq, x: +x.toFixed(1), z: +z.toFixed(1) } });
+}
+function roamWarp() {                              // the Final Hour is over: it is suddenly close to the nearest player (only the owner moves it; everyone sees it jump)
+  const m = RS.m; if (!m || !RN.owner) return; const px = Math.floor(P.x / T), py = Math.floor(P.z / T), bfs = rBFS(px, py, 7), c = [];
+  for (let i = 0; i < bfs.dist.length; i++) if (bfs.dist[i] >= 4) c.push(i);
+  if (!c.length) return; const i = rPick(c); m.x = ((i % GW) + .5) * T; m.z = (((i / GW) | 0) + .5) * T; m.path = null; m.st = m.id === 'book' ? 'watch' : m.id === 'clown' ? 'chase' : 'roam'; m.cool = 0; m.warn = 0; m.stT = 0; m.snap = true;
 }
 
 // ================= main update =================
 function updateRoamers(dt, t) {
-  if (RS.card && RS.cardT > 0) { RS.cardT -= dt; if (RS.cardT <= 0) RS.card.style.opacity = 0; }
-  if (!started || !world || P.escaped) { if (RS.m) rKill(); RS.wld = null; return; }
-  if (RS.wld !== world) rBuild();
-  if (!rOn()) { if (RS.m && RS.m.av.visible) RS.m.av.visible = false; return; }
-  if (paused || P.freeze) return;
-  if (!RS.m) { RS.t -= dt; if (RS.t <= 0) rSpawn(false); return; }
-  // AI level of detail: near = every frame; mid (past ~80% of view distance) = ~8 Hz; far (past ~140%) = ~1.5 Hz, hidden, no animation and no line-of-sight raycast.
-  const m = RS.m, vd = CFG.dist || 45, d0 = Math.hypot(P.x - m.x, P.z - m.z), lod = d0 < vd * .8 ? 0 : d0 < vd * 1.4 ? 1 : 2;
-  RS.t -= dt; m.lodT = (m.lodT || 0) + dt;
-  if (lod === 0 || m.lodT >= (lod === 1 ? .12 : .65)) {
-    const step = lod === 0 ? dt : Math.min(m.lodT, .65); m.lodT = 0; m.av.visible = lod < 2;
-    const c = lod === 2 ? { dx: P.x - m.x, dz: P.z - m.z, dist: d0, los: false, face: 0, cosA: 0, down: P.down > 0 } : rSense(m); m.moving = false;
-    if (!RS.shown[m.id] && ((c.los && c.dist < 26) || RS.t < -40)) rCard(m.ty);
-    if (m.id === 'grass') updGrass(m, step, t, c); else if (m.id === 'book') updBook(m, step, t, c); else updClown(m, step, t, c);
+  if (!started || !world || P.escaped) {
+    if (RS.m) rKill(); if (RS.wld) { RS.wld = null; if (typeof net !== 'undefined' && net.r) net.set({ rl: -1, rm: 0 }); } return;      // an escaped player no longer counts as being in the level
   }
+  if (RS.wld !== world) rBuild();
+  const peers = rNetPeers(), owner = rElect(peers); RN.owner = owner;
+  RN.rlT -= dt; if (RN.rlT <= 0) { RN.rlT = 2; rPubLevel(LV); }
+  if (RN.lastOwner !== null && RN.lastOwner !== owner) {          // the baton passed
+    if (owner && RS.m) { RS.m.path = null; RS.m.pend = null; RS.m.wait = 0; } else if (!owner && typeof net !== 'undefined' && net.r) net.set({ rm: 0 });
+    RN.evSeen = -1;
+  }
+  RN.lastOwner = owner;
+  if (paused || P.freeze) return;
+  const ty = RT[LV]; if (!ty) return;
+  let m = RS.m;
+  if (owner) {
+    if (!m) { RS.t -= dt; if (RS.t <= 0) rSpawn(false); m = RS.m; }
+    if (m) {
+      m.av.visible = rOn();
+      const TS = rTargets(peers, dt), tg = rNearest(TS, m), c = rSenseT(m, tg); m.moving = false;
+      if (m.id === 'grass') aiGrass(m, dt, t, c, TS); else if (m.id === 'book') aiBook(m, dt, t, c, TS); else aiClown(m, dt, t, c, TS, peers);
+      for (const q of peers) { const ra = q.pr.ra; if (!q.me && ra && RN.raSeen[q.id] !== ra.q) { RN.raSeen[q.id] = ra.q; rAlertLocal(ra.x, ra.z); } }          // a teammate made a loud noise
+      RN.pubT -= dt;
+      if (RN.pubT <= 0 && typeof net !== 'undefined' && net.r) {
+        RN.pubT = .1; net.set({ rm: { l: LV, x: +m.x.toFixed(2), z: +m.z.toFixed(2), r: +m.ry.toFixed(2), s: m.st, v: m.moving ? 1 : 0, t: m.loot || 0, q: RN.seq, e: RN.evq.map(x => x.slice()), sn: m.snap ? 1 : 0 } }); m.snap = false;
+      }
+    }
+  } else {                                         // everybody else just draws what the owner publishes
+    const op = peers.find(q => q.id === RN.ownerId), rm = op && op.pr.rm;
+    if (rm && rm.l === LV && typeof rm.x === 'number') {
+      RN.noRm = 0;
+      if (!m) m = rMake(rm.x, rm.z);
+      if (m) {
+        const k = 1 - Math.exp(-14 * dt), far = Math.hypot(rm.x - m.x, rm.z - m.z) > 10 || rm.sn;
+        m.x = far ? rm.x : m.x + (rm.x - m.x) * k; m.z = far ? rm.z : m.z + (rm.z - m.z) * k; m.ry += angDiff(m.ry, rm.r) * k;
+        m.st = rm.s; m.moving = !!rm.v; m.loot = rm.t || null;
+        if (RN.evSeen < 0) RN.evSeen = rm.q;                                                    // first time we see this owner: do not replay old events
+        else for (const e of (rm.e || [])) if (e[0] > RN.evSeen) { RN.evSeen = e[0]; rApplyEv(m, e); }          // mark it seen BEFORE playing it, so it can never fire twice
+        RN.evSeen = Math.max(RN.evSeen, rm.q);
+        m.av.visible = rOn();
+      }
+    } else if (m) { RN.noRm += dt; if (RN.noRm > 4) rKill(); }
+    m = RS.m;
+  }
+  if (!m) return;
+  const dist = rDistMe(m);
+  if (m.id === 'grass') poseGrass(m, dt, t, dist); else if (m.id === 'book') { poseBook(m, dt, t, dist); fxBook(m, dt); } else poseClown(m, dt, t, dist);
   m.av.position.set(m.x, 0, m.z); m.av.rotation.y = m.ry;
   m.light.x = m.x; m.light.z = m.z; m.light.y = m.id === 'book' ? 2.3 : 1.5;
 }
-// handy for testing: type summonRoamer() in the browser console once you're in a level
-window.summonRoamer = function () { if (!started || !world) return 'start a game first'; if (RS.m) return 'already out there: ' + RS.m.ty.name; RS.shown = {}; return rSpawn(true) ? RT[LV].name + ' is coming' : 'no spot found, try again'; };
+// handy for testing: type summonRoamer() in the browser console once you're in a level (only works on the player who runs the creature)
+window.summonRoamer = function () {
+  if (!started || !world) return 'start a game first'; if (!RN.owner) return 'another player runs the creature in this room';
+  if (RS.m) return 'already out there'; return rSpawn(true) ? RT[LV].name + ' is coming' : 'no spot found, try again';
+};
   </script>
 </body>
 
