@@ -24,7 +24,6 @@ const FEAR = {
   voice: true,                  // let the browser's speech voice whisper (your name, "behind you"). Set false if it sounds silly on your computer
   firstEvent: [7, 11],          // seconds until the first thing happens
   gap: [30, 9],                 // seconds between events at fear 0 and at fear 1
-  murmur: [18, 32],             // an always-on quiet mumble somewhere around you, every N seconds
   eyes: [1, 6],                 // eyes in the dark at fear 0 and at fear 1
   stalkerFirst: [28, 45],       // seconds until the Stalker first shows up on a level
   stalkerDist: [24, 19, 14, 10, 7],   // metres from you at stage 0..4 (it is closer every time you look at it)
@@ -292,9 +291,6 @@ function fDirector(dt, fear) {
     FS.evT = (FEAR.gap[0] + (FEAR.gap[1] - FEAR.gap[0]) * fear) * fR(.7, 1.3);
     const first = !FS.started; FS.started = 1; const pool = first ? [FEV[0]] : FEV.filter(e => fear >= e[2]); let w = 0; for (const e of pool) w += e[1];
     let r = Math.random() * w, pick = pool[0]; for (const e of pool) { r -= e[1]; if (r <= 0) { pick = e; break; } } fEvent(pick[0]);
-  }
-  FS.muT -= dt; if (FS.muT <= 0 && fOn()) {      // the constant low murmur: you are never quite alone
-    FS.muT = fR(FEAR.murmur[0], FEAR.murmur[1]) * (1.2 - fear * .5); const a = fAt(fR(1, 3.5), fR(0, 360)); fWhisper({ x: a.x, y: 1.4, z: a.z, vol: .9, n: 3 + ((Math.random() * 4) | 0) });
   }
 }
 
