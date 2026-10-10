@@ -31,7 +31,7 @@ const VB = { clips: new Map(), taps: new Map(), ok: new Set(), max: 8, minS: .5,
 // listen in on a teammate's voice-chat stream (called from vcPlay). Splits speech into utterances with a simple loudness gate.
 function mimicTap(id, ctx, src) {
   mimicUntap(id);
-  if (!ctx.createScriptProcessor) return;                              // no capture support: the Mimic falls back to a synthetic murmur
+  if (!ctx.createScriptProcessor) return;                              // no capture support: the Mimic simply never speaks
   const proc = ctx.createScriptProcessor(2048, 1, 1), mute = ctx.createGain(); mute.gain.value = 0;
   const st = { proc, mute, src, parts: [], n: 0, qb: 0, talk: false, floor: .004 };
   proc.onaudioprocess = (e) => vbBlock(id, st, e.inputBuffer.getChannelData(0), ctx.sampleRate);
@@ -76,31 +76,15 @@ function mimicSync() {
 function mimicConsent() { net.set({ mv: CFG.mimicVoice ? 1 : 0 }); if (!CFG.mimicVoice) VB.clips.clear(); }
 
 // ================= its voice =================
-// a breathy synthetic murmur, used when it has no recording of the person it is wearing
-function mimicSynth(c, out, harsh) {
-  const dur = harsh ? 1.1 : 1.1 + Math.random() * 1.3, t0 = c.currentTime + .02, f0 = 105 + Math.random() * 70;
-  const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(f0, t0); o.frequency.linearRampToValueAtTime(f0 * (harsh ? .6 : .85 + Math.random() * .3), t0 + dur);
-  const vib = c.createOscillator(), vg = c.createGain(); vib.frequency.value = 5.2; vg.gain.value = 3; vib.connect(vg); vg.connect(o.frequency);
-  const amp = c.createGain(), f1 = c.createBiquadFilter(), f2 = c.createBiquadFilter(), mix = c.createGain();
-  f1.type = f2.type = 'bandpass'; f1.Q.value = 6; f2.Q.value = 9; amp.gain.value = 0; mix.gain.value = 2.2;
-  o.connect(amp); amp.connect(f1); amp.connect(f2); f1.connect(mix); f2.connect(mix); mix.connect(out);
-  const V = [[730, 1090], [530, 1840], [660, 1720], [400, 800], [300, 2300], [570, 840]], n = Math.max(3, Math.round(dur / .2)), sl = dur / n;
-  for (let i = 0; i < n; i++) {
-    const t = t0 + i * sl, v = V[(Math.random() * V.length) | 0]; f1.frequency.setValueAtTime(v[0], t); f2.frequency.setValueAtTime(v[1], t);
-    amp.gain.setValueAtTime(.0001, t); amp.gain.linearRampToValueAtTime(.5, t + sl * .3); amp.gain.linearRampToValueAtTime(.06, t + sl * .95);
-  }
-  amp.gain.linearRampToValueAtTime(.0001, t0 + dur + .05);
-  o.start(t0); vib.start(t0); o.stop(t0 + dur + .1); vib.stop(t0 + dur + .1);
-  return dur + .1;
-}
-// say something: a recorded clip of whoever it is wearing (slowed a touch and doubled so it sounds hollow), else a murmur
+// say something: a recorded clip of whoever it is wearing (slowed a touch and doubled so it sounds hollow). With no recording of a real player it stays SILENT: no fake voice.
 function mimicSpeak(kind) {
   const c = Aud.ctx; if (!c || !Aud.m) return;
+  const bank = (Mim.srcId != null && CFG.mimicVoice) ? VB.clips.get(Mim.srcId) : null; if (!(bank && bank.length)) return;
   const hp = c.createBiquadFilter(), lp = c.createBiquadFilter(), g = c.createGain(), pan = c.createStereoPanner ? c.createStereoPanner() : null;
   hp.type = 'highpass'; hp.frequency.value = 130; lp.type = 'lowpass'; lp.frequency.value = 900; g.gain.value = 0;
   hp.connect(lp); lp.connect(g); if (pan) { g.connect(pan); pan.connect(Aud.m); } else g.connect(Aud.m);
-  const bank = (Mim.srcId != null && CFG.mimicVoice) ? VB.clips.get(Mim.srcId) : null; let dur;
-  if (bank && bank.length) {
+  let dur;
+  {
     let k = (Math.random() * bank.length) | 0; if (bank.length > 1 && k === Mim.lastClip) k = (k + 1) % bank.length; Mim.lastClip = k;
     const cl = bank[k], buf = c.createBuffer(1, cl.d.length, cl.r), rate = kind === 'shriek' ? .72 : .9 + Math.random() * .06;
     buf.copyToChannel(cl.d, 0);
@@ -108,7 +92,7 @@ function mimicSpeak(kind) {
       const s = c.createBufferSource(), sg = c.createGain(); s.buffer = buf; s.playbackRate.value = rt; sg.gain.value = gain; s.connect(sg); sg.connect(hp); s.start(c.currentTime + off);
     }
     dur = cl.d.length / cl.r / rate + .1;
-  } else dur = mimicSynth(c, hp, kind === 'shriek');
+  }
   Mim.voice = { g, pan, lp, end: c.currentTime + dur };
   setTimeout(() => { try { g.disconnect(); } catch (e) { } }, (dur + .4) * 1000);
 }

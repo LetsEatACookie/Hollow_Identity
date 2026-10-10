@@ -309,6 +309,8 @@ function updateFear(dt, t) {
   // the unseen
   if (FS.stalk > 0) FS.stalk -= dt; fDirector(dt, f); fTrail(dt); fEyesTick(dt, f); fStalkerTick(dt);
 }
+// no scary text on screen, ever: this silences extras.html's whispers and escape.html's "behind you" / "breathe" lines (toasts about items and the exit still show)
+xWhisper = function () { };
 { const ux = updateExtras; updateExtras = function (dt, t) { FS.inX = true; try { ux(dt, t); } finally { FS.inX = false; } if (FS.errs > 6) return; try { updateFear(dt, t); } catch (e) { FS.errs++; console.error('fear.html:', e); } }; }
   </script>
 </body>
