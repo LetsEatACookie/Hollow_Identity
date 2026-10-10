@@ -583,7 +583,7 @@ function libEnv(w) {        // fog, background, ambient light and sky for whiche
   for (const o of SKYOBJ) o.visible = !w.lib;
 }
 async function libEnter() {
-  if (lvBusy || LV !== 0 || !world || !started) return; lvBusy = true;
+  if (lvBusy || (LV !== 0 && LV !== 3) || !world || !started) return; lvBusy = true;
   P.freeze = true; keys.clear(); joy.x = joy.y = 0; touchSprint = false; Torch.shaking = false;
   Aud.shift(); libFade(true, 'LEVEL 2', 'The Library');
   await wait(1100);
