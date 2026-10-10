@@ -1466,8 +1466,9 @@
       <div class="set"><label for="sSens">Mouse sensitivity</label><input id="sSens" type="range" min="30" max="250"
           step="5"><output></output></div>
       <div class="set"><label for="sInv">Invert Y</label><input id="sInv" type="checkbox"></div>
-      <div class="set"><label for="sVol">Volume</label><input id="sVol" type="range" min="0" max="100"
+      <div class="set"><label for="sVol">Game volume</label><input id="sVol" type="range" min="0" max="100"
           step="5"><output></output></div>
+      <div class="set"><label for="sVcVol">Player volume</label><input id="sVcVol" type="range" min="0" max="150" step="5"><output></output></div>
       <div class="set"><label for="sGrain">Film grain</label><input id="sGrain" type="checkbox"></div>
       <div class="set"><label for="sScare">Jumpscares</label><input id="sScare" type="checkbox"></div>
       <div class="set"><label for="sMimic">The Mimic (shapeshifter)</label><input id="sMimic" type="checkbox"></div>
@@ -1982,7 +1983,7 @@
       let hemi, spot, fill, torchGroup, torchLens, pool = [], poolTimer = 0, petals = null, explored = null;
       const net = { r: null, kind: 'none', set(p) { if (this.r) this.r.presence(p).catch(() => { }); } };
       const isTouch = (window.matchMedia && matchMedia('(pointer:coarse)').matches) || ('ontouchstart' in window);
-      const CFG = Object.assign({ v: 2, res: 100, auto: true, dist: 45, lights: 3, fov: 72, sens: 100, inv: false, vol: 85, fps: true, grain: false, scares: true, mimic: true, mimicVoice: true }, (() => { try { const o = JSON.parse(localStorage.getItem('hg-set') || '{}'); return o.v === 2 ? o : {}; } catch (e) { return {}; } })());
+      const CFG = Object.assign({ v: 2, res: 100, auto: true, dist: 45, lights: 3, fov: 72, sens: 100, inv: false, vol: 85, fps: true, grain: false, scares: true, mimic: true, mimicVoice: true, vcVol: 100 }, (() => { try { const o = JSON.parse(localStorage.getItem('hg-set') || '{}'); return o.v === 2 ? o : {}; } catch (e) { return {}; } })());
       const saveS = () => { try { localStorage.setItem('hg-set', JSON.stringify(CFG)); } catch (e) { } };
       let autoK = 1, paused = false, everLocked = false, pauseT = 0, mX = innerWidth / 2, mY = innerHeight / 2, fpsAcc = 0, fpsN = 0, adaptT = 0, upN = 0, lockToast = false, bdDown = false, leaveArm = 0;
       const frustum = new THREE.Frustum(), pvm = new THREE.Matrix4(), CHUNKS = [];
@@ -2594,7 +2595,7 @@
             g = clamp((VC.range - d) / (VC.range - VC.full), 0, 1); g *= g;
             pn = clamp((dx * rx + dz * rz) / rl / Math.max(d, .001), -1, 1) * clamp(d / 3, 0, 1) * .8;
           }
-          n.gain.gain.setTargetAtTime(g * CFG.vol / 100, VC.ctx.currentTime, .08); if (n.pan) n.pan.pan.setTargetAtTime(pn, VC.ctx.currentTime, .08);
+          n.gain.gain.setTargetAtTime(g * CFG.vcVol / 100, VC.ctx.currentTime, .08); if (n.pan) n.pan.pan.setTargetAtTime(pn, VC.ctx.currentTime, .08);
         }
       }
       const vcToggle = () => (VC.on ? vcStop() : vcStart());
@@ -2776,7 +2777,7 @@
         else if (fps > 57 && autoK < 1 && tNow > noRaise) { if (++upN >= 5) { upN = 0; autoK = Math.min(1, autoK + .05); applyRes(); } }
         else upN = 0;
       }
-      const SETS = [['sRes', 'res', 'change'], ['sDist', 'dist', 'input'], ['sLights', 'lights', 'change'], ['sFov', 'fov', 'input'], ['sSens', 'sens', 'input'], ['sVol', 'vol', 'input']], CHK = [['sAuto', 'auto'], ['sInv', 'inv'], ['sFps', 'fps'], ['sGrain', 'grain'], ['sScare', 'scares'], ['sMimic', 'mimic'], ['sMimicVoice', 'mimicVoice']], UN = { res: '%', dist: ' m', lights: '', fov: '°', sens: '%', vol: '%' };
+      const SETS = [['sRes', 'res', 'change'], ['sDist', 'dist', 'input'], ['sLights', 'lights', 'change'], ['sFov', 'fov', 'input'], ['sSens', 'sens', 'input'], ['sVol', 'vol', 'input'], ['sVcVol', 'vcVol', 'input']], CHK = [['sAuto', 'auto'], ['sInv', 'inv'], ['sFps', 'fps'], ['sGrain', 'grain'], ['sScare', 'scares'], ['sMimic', 'mimic'], ['sMimicVoice', 'mimicVoice']], UN = { res: '%', dist: ' m', lights: '', fov: '°', sens: '%', vol: '%', vcVol: '%' };
       function syncUI() { for (const [id, k] of SETS) { const el = $('#' + id); el.value = CFG[k]; el.nextElementSibling.textContent = CFG[k] + UN[k]; } for (const [id, k] of CHK) $('#' + id).checked = !!CFG[k]; }
       for (const [id, k, ev] of SETS) { const el = $('#' + id); el.addEventListener('input', () => { el.nextElementSibling.textContent = el.value + UN[k]; }); el.addEventListener(ev, () => { CFG[k] = +el.value; if (world) applyAll(); }); }
       for (const [id, k] of CHK) $('#' + id).addEventListener('change', (e) => { CFG[k] = e.target.checked; if (world) applyAll(); if (k === 'mimicVoice') mimicConsent(); });
