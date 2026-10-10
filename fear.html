@@ -9,9 +9,8 @@
 <body>
   <!-- FEAR: the "something is watching you, all the time" layer. index.html loads this file at start-up; it hooks updateExtras (extras.html), so it runs every frame.
        No audio files: everything is synthesised with the Web Audio API.
-       SOUND   a dark drone that never fully stops and swells with your fear · slow detuned music box from somewhere in the dark
-               distant screams that cut off mid-breath · knocking · scratching
-               · slamming doors · footsteps that follow you and stop a beat after you do · sudden silence
+       SOUND   a steady, unchanging dark drone
+               (kept deliberately minimal: a steady drone and your heartbeat. No screams, knocks, footsteps or voices.)
        SIGHT   EYES that open in the dark at the edge of your vision and vanish when you look at them · THE STALKER: a pale figure that stands far away, stares, and every
                time you look at it and look away it is closer. Let it get close enough and it runs. · a vignette that tightens and pulses with your heartbeat
        FEAR    a 0..1 number (darkness, dread, low health, how deep the level is, how close the Stalker is) drives all of it: the more scared you are, the more happens.
@@ -53,9 +52,8 @@ function fBuild(ctx) {
   FS.out = out; FS.bus = bus;
   // the drone: a minor second and a tritone over a low saw. Never resolves.
   const mkO = (type, f, det, dest, g) => { const o = c.createOscillator(); o.type = type; o.frequency.value = f; o.detune.value = det; const k = c.createGain(); k.gain.value = g; o.connect(k); k.connect(dest); o.start(); return o; };
-  const padLP = c.createBiquadFilter(); padLP.type = 'lowpass'; padLP.frequency.value = 240; padLP.Q.value = 5; const padG = c.createGain(); padG.gain.value = 0; padLP.connect(padG); padG.connect(bus);
-  mkO('sawtooth', 55, -9, padLP, .3); mkO('sawtooth', 55, 8, padLP, .3); mkO('sawtooth', 58.27, 0, padLP, .22); mkO('triangle', 77.78, 4, padLP, .25); mkO('sine', 110, 0, padLP, .2);
-  const pl = c.createOscillator(); pl.frequency.value = .045; const plg = c.createGain(); plg.gain.value = 130; pl.connect(plg); plg.connect(padLP.frequency); pl.start();
+  const padLP = c.createBiquadFilter(); padLP.type = 'lowpass'; padLP.frequency.value = 240; padLP.Q.value = .7; const padG = c.createGain(); padG.gain.value = 0; padLP.connect(padG); padG.connect(bus);
+  mkO('sawtooth', 55, 0, padLP, .55); mkO('sawtooth', 58.27, 0, padLP, .22); mkO('triangle', 77.78, 4, padLP, .25); mkO('sine', 110, 0, padLP, .2);
   const subG = c.createGain(); subG.gain.value = 0; subG.connect(bus); mkO('sine', 41, 0, subG, 1);
   FS.d = { padG, subG, padLP };
   return true;
@@ -76,63 +74,12 @@ function fAt(dist, deg, y) {                 // a point `dist` metres from you, 
 }
 
 // ---------- voices ----------
-function fScream(o) {                        // a human-ish scream: saw + vibrato through moving formants, with a rasp. o: x,z,y, dur, f0,f1, vol, dist, abrupt, track
-  const c = FS.c, t = c.currentTime + .03, dur = o.dur || 1.4, vol = o.vol == null ? .5 : o.vol, dist = o.dist || 10;
-  const osc = c.createOscillator(); osc.type = 'sawtooth'; const f0 = o.f0 || 640, f1 = o.f1 || 1500;
-  osc.frequency.setValueAtTime(f0, t); osc.frequency.exponentialRampToValueAtTime(f1, t + dur * .3); osc.frequency.exponentialRampToValueAtTime(f0 * fR(1, 1.35), t + dur);
-  const vib = c.createOscillator(); vib.frequency.value = fR(5.5, 7.5); const vg = c.createGain(); vg.gain.value = fR(20, 45); vib.connect(vg); vg.connect(osc.frequency);
-  const na = c.createBufferSource(); na.buffer = FS.noise; na.loop = true; const nbp = c.createBiquadFilter(); nbp.type = 'bandpass'; nbp.frequency.value = 2600; nbp.Q.value = 1.1; const ng = c.createGain(); ng.gain.value = .5;
-  const fa = c.createBiquadFilter(), fb = c.createBiquadFilter(); fa.type = fb.type = 'bandpass'; fa.Q.value = 3; fb.Q.value = 5;
-  fa.frequency.setValueAtTime(fR(700, 950), t); fa.frequency.linearRampToValueAtTime(fR(550, 750), t + dur); fb.frequency.setValueAtTime(fR(1700, 2200), t); fb.frequency.linearRampToValueAtTime(fR(2400, 3200), t + dur * .5);
-  const mix = c.createGain(); mix.gain.value = 1; osc.connect(fa); osc.connect(fb); na.connect(nbp); nbp.connect(ng); ng.connect(fb); fa.connect(mix); fb.connect(mix);
-  const ws = c.createWaveShaper(), cur = new Float32Array(256); for (let i = 0; i < 256; i++) { const x = i / 128 - 1; cur[i] = Math.tanh(x * 3.2); } ws.curve = cur;
-  const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = fC(9000 / (1 + dist * .14), 900, 9000);
-  const g = c.createGain(); g.gain.setValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(vol, t + .06);
-  const trem = c.createOscillator(); trem.frequency.value = fR(11, 16); const tg = c.createGain(); tg.gain.value = vol * .22; trem.connect(tg); tg.connect(g.gain);
-  if (o.abrupt) { g.gain.setValueAtTime(vol, t + dur); g.gain.linearRampToValueAtTime(0, t + dur + .03); } else g.gain.exponentialRampToValueAtTime(.0001, t + dur + .5);
-  mix.connect(ws); ws.connect(lp); lp.connect(g);
-  const p = fPan(o.x, o.y == null ? 1.6 : o.y, o.z, o.ref || 1.5, o.roll == null ? .5 : o.roll); g.connect(p);
-  const end = t + dur + .6; osc.start(t); vib.start(t); na.start(t); trem.start(t); osc.stop(end); vib.stop(end); na.stop(end); trem.stop(end);
-  return p;
-}
-function fThump(x, z, vol, f, roll) {              // a knock / a door: a low body and a click
-  const c = FS.c, t = c.currentTime + .02, o = c.createOscillator(), g = c.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(f || 140, t); o.frequency.exponentialRampToValueAtTime(48, t + .18);
-  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + .28); const p = fPan(x, 1.3, z, 1.5, roll == null ? .9 : roll); o.connect(g); g.connect(p); o.start(t); o.stop(t + .3);
-  const s = c.createBufferSource(); s.buffer = FS.noise; const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 520; bp.Q.value = 1.2; const g2 = c.createGain(); g2.gain.setValueAtTime(vol * .8, t); g2.gain.exponentialRampToValueAtTime(.0001, t + .09);
-  s.connect(bp); bp.connect(g2); g2.connect(p); s.start(t, Math.random() * 2, .12);
-}
-function fScratch(x, z) {                    // nails on wood
-  const c = FS.c, t = c.currentTime + .03, s = c.createBufferSource(); s.buffer = FS.noise; s.loop = true; const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 3300; bp.Q.value = 2.2; const g = c.createGain(); g.gain.value = 0;
-  s.connect(bp); bp.connect(g); g.connect(fPan(x, 1.2, z, 1.2, 1)); let tt = t; for (let i = 0; i < 9; i++) { g.gain.linearRampToValueAtTime(.0001, tt); g.gain.linearRampToValueAtTime(fR(1.4, 3.2), tt + .03); g.gain.linearRampToValueAtTime(.0001, tt + .14); tt += fR(.12, .22); }
-  s.start(t, Math.random()); s.stop(tt + .2);
-}
-function fBell(f, t, vol, dest) {            // one music-box note
-  const c = FS.c; for (const [m, v, d] of [[1, 1, 1.6], [2.76, .35, .7], [5.4, .12, .35]]) {
-    const o = c.createOscillator(), g = c.createGain(); o.type = 'sine'; o.frequency.value = f * m; g.gain.setValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(vol * v, t + .004); g.gain.exponentialRampToValueAtTime(.0001, t + d); o.connect(g); g.connect(dest); o.start(t); o.stop(t + d + .05);
-  }
-}
-function fMusicBox(x, z) {                   // a slow, out-of-tune lullaby that slows down, drifts flat and stops mid-phrase
-  const c = FS.c, pat = fPick([[0, 3, 7, 3, 12, 10, 7, 3], [7, 5, 3, 1, 0, 1, 3, -2], [0, 1, 0, -2, 0, 3, 1, 0], [12, 10, 7, 8, 7, 3, 1, 0]]), p = fPan(x, 1.4, z, 3, .35);
-  let t = c.currentTime + .05, step = fR(.5, .68), drift = 0; const N = 11 + ((Math.random() * 9) | 0), base = 523.25 * Math.pow(2, fR(-3, 2) / 12);
-  for (let i = 0; i < N; i++) {
-    drift -= fR(0, 9) / 1200 * (i > 4 ? 1 : .3);
-    fBell(base * Math.pow(2, pat[i % pat.length] / 12 + drift + fR(-18, 18) / 1200), t, .35, p);
-    t += step * (1 + i * .035) * (Math.random() < .15 ? 1.8 : 1);
-  }
-  return t - c.currentTime;
-}
 function fHeart(v) {                         // lub-dub in the chest
   const c = FS.c, t = c.currentTime + .01; for (const [dt, f, g0] of [[0, 62, 1], [.17, 54, .7]]) {
     const o = c.createOscillator(), g = c.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(f, t + dt); o.frequency.exponentialRampToValueAtTime(34, t + dt + .16);
     g.gain.setValueAtTime(.0001, t + dt); g.gain.linearRampToValueAtTime(v * g0, t + dt + .012); g.gain.exponentialRampToValueAtTime(.0001, t + dt + .2); o.connect(g); g.connect(FS.bus); o.start(t + dt); o.stop(t + dt + .25);
   }
 }
-function fStep(x, z, v) {                    // a footstep that is not yours
-  const c = FS.c, t = c.currentTime + .01, p = fPan(x, .2, z, 1.2, 1.1), s = c.createBufferSource(); s.buffer = FS.noise; const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 480; bp.Q.value = 1.4; const g = c.createGain();
-  g.gain.setValueAtTime(v * 2.8, t); g.gain.exponentialRampToValueAtTime(.0001, t + .13); s.connect(bp); bp.connect(g); g.connect(p); s.start(t, Math.random() * 2, .16);
-  const o = c.createOscillator(), g2 = c.createGain(); o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(55, t + .1); g2.gain.setValueAtTime(v * 2, t); g2.gain.exponentialRampToValueAtTime(.0001, t + .12); o.connect(g2); g2.connect(p); o.start(t); o.stop(t + .15);
-}
-
 // ---------- sight ----------
 function fUi() {
   if (FS.vig) return;
@@ -195,7 +142,7 @@ function fStalkerTick(dt) {
     if (d < 2.8 || (S.look > .9 && S.stage >= 4)) return fRush();
     if (S.look > .9) {                                       // you looked: it goes. next time it is closer.
       g.visible = false; S.st = 'wait'; S.stage = Math.min(4, S.stage + 1); S.t = fR(9, 20) * (1.1 - FS.fear * .5); S.look = 0;
-      Aud.soft(90, 52, 1.1, .1); return;
+      return;
     }
     if (S.lost > 8 || S.age > 55 || d > 40) { g.visible = false; S.st = 'wait'; S.t = fR(8, 16); }
   } else if (S.st === 'rush') {
@@ -203,8 +150,7 @@ function fStalkerTick(dt) {
     if (FS.rushP && FS.rushP.positionX) { FS.rushP.positionX.value = g.position.x; FS.rushP.positionZ.value = g.position.z; }
     if (d < 1.2) {                                           // it reached you
       g.visible = false; g.position.y = 0; S.st = 'wait'; S.t = fR(70, 110); S.stage = 2; S.look = 0; FS.rushP = null;
-      Aud.stinger(1); Scare.shake = 1; P.flickT = Math.max(P.flickT, 1.8); fFlash(.95, '#fff'); setTimeout(() => fFlash(.5, '#600'), 90);
-      const a = fAt(.5, 160); fScream({ x: a.x, y: 1.5, z: a.z, dur: 1.1, f0: 620, f1: 1500, vol: 3.2, dist: 1, ref: .6, roll: 1.6 });
+      Scare.shake = 1; P.flickT = Math.max(P.flickT, 1.8); fFlash(.95, '#fff'); setTimeout(() => fFlash(.5, '#600'), 90);
       if (typeof ES !== 'undefined' && ES.dread != null) ES.dread = Math.min(100, ES.dread + 22);
     }
   }
@@ -215,32 +161,17 @@ function fStalkerSpawn() {
   if (typeof ES !== 'undefined' && ES.dread != null) ES.dread = Math.min(100, ES.dread + 4);
 }
 function fRush() {
-  const S = FS.sk, g = FS.fig; S.st = 'rush'; FS.rushP = fScream({ x: g.position.x, y: 1.7, z: g.position.z, dur: 2.6, f0: 620, f1: 1500, vol: 1.15, dist: 8, ref: 2, roll: .8 }); Scare.shake = Math.max(Scare.shake, .3); P.flickT = 1;
+  const S = FS.sk, g = FS.fig; S.st = 'rush'; Scare.shake = Math.max(Scare.shake, .3); P.flickT = 1;
 }
 
 // ---------- the director: things happen, more often the more scared you are ----------
-const FEV = [
-  ['scream', 2, .15], ['music', 1.6, .1], ['knock', 1.5, .2], ['door', 1, 0], ['silence', 1.1, .25],
-  ['follow', 1.3, .3], ['flicker', 1.5, .1], ['gaze', .7, .55], ['scratch', 1, .2]
-];
+const FEV = [['flicker', 1.5, .1], ['gaze', .7, .55]];
 function fEvent(name) {
   const c = FS.c;
-  if (name === 'scream') {
-    const a = fAt(fR(28, 50), fR(0, 360)); fScream({ x: a.x, z: a.z, dur: fR(1.1, 1.9), f0: fR(520, 760), f1: fR(1300, 1800), vol: .95, dist: 35, abrupt: Math.random() < .7, ref: 3, roll: .25 }); P.flickT = Math.max(P.flickT, .35); FS.silT = Math.max(FS.silT, 2.5);
-  } else if (name === 'music') { const a = fAt(fR(12, 24), fR(0, 360)); fMusicBox(a.x, a.z);
-  } else if (name === 'knock') {              // three slow knocks from just beyond the wall, then something moves
-    const a = fAt(fR(3.5, 7), fR(60, 300)); [0, 520, 1050].forEach(ms => setTimeout(() => fThump(a.x, a.z, 1.4, 150), ms)); if (Math.random() < .5) setTimeout(() => { const b = fAt(2.2, fR(120, 240)); fScratch(b.x, b.z); }, 2200);
-  } else if (name === 'door') { const a = fAt(fR(14, 30), fR(0, 360)); fThump(a.x, a.z, 2.4, 90, .3); setTimeout(() => fThump(a.x, a.z, 1.1, 70, .3), 160);
-  } else if (name === 'silence') {            // everything stops. you hear only yourself. then something answers.
-    const sec = fR(4, 7); FS.silT = sec;
-    setTimeout(() => { if (!FS.c) return; const a = fAt(2, 180); fStep(a.x, a.z, .9); }, (sec - 1.2) * 1000);
-  } else if (name === 'follow') { FS.stalk = fR(14, 26);
-  } else if (name === 'flicker') { P.flickT = Math.max(P.flickT, fR(1, 2)); 
-  } else if (name === 'scratch') { const a = fAt(fR(2.5, 5), fR(60, 300)); fScratch(a.x, a.z);
+  if (name === 'flicker') { P.flickT = Math.max(P.flickT, fR(1, 2));
   } else if (name === 'gaze') {               // the dark is full of eyes. then all at once, none.
     for (let i = 0; i < 6; i++) { const sp = fSpot(7, 20, false); if (!sp) continue; let e = FS.eyes.find(q => !q.on); if (!e) { const s = new THREE.Sprite(fEyeMat(0)); s.visible = false; scene.add(s); FS.eyes.push(e = { s }); }
       Object.assign(e, { on: true, out: false, x: sp.x, z: sp.z, y: fR(.3, 2.8), age: 0, life: fR(5, 8), seen: -2, lost: 0, op: 0, bl: fR(1, 3), blk: 0, ph: Math.random() * 6, big: 1 }); e.s.visible = true; }
-    FS.silT = Math.max(FS.silT, 3);
   }
 }
 function fDirector(dt, fear) {
@@ -250,17 +181,6 @@ function fDirector(dt, fear) {
     const first = !FS.started; FS.started = 1; const pool = first ? [FEV.find(e => e[0] === 'knock')] : FEV.filter(e => fear >= e[2]); let w = 0; for (const e of pool) w += e[1];
     let r = Math.random() * w, pick = pool[0]; for (const e of pool) { r -= e[1]; if (r <= 0) { pick = e; break; } } fEvent(pick[0]);
   }
-}
-
-// ---------- footsteps behind you ----------
-function fFollowStep(v) {
-  if (!FS.c || !fOn()) return; const now = performance.now(); FS.lastStep = now; FS.trail = 0; const going = FS.stalk > 0 || (FS.fear > .5 && Math.random() < .2);
-  if (!going) return; const dly = fR(300, 480), a = fAt(fR(3, 4.5), 180);
-  setTimeout(() => { if (FS.c) fStep(a.x, a.z, .55 * v + .15); }, dly);
-}
-function fTrail(dt) {                          // when you stop, it takes two more steps. then silence.
-  if (!(FS.stalk > 0)) { FS.trail = 0; return; } const idle = performance.now() - FS.lastStep;
-  if (idle > 900 && FS.trail < 3 && P.speed < .5) { FS.trailT -= dt; if (FS.trailT <= 0) { FS.trailT = .6; FS.trail++; const a = fAt(2.6 - FS.trail * .7, 180); fStep(a.x, a.z, .7); } }
 }
 
 // ---------- every frame ----------
@@ -275,20 +195,17 @@ function updateFear(dt, t) {
   if (!FS.c || FS.c !== Aud.ctx) { if (!fBuild()) return; FS.on = true; }
   if (!FS.hooked) { FS.hooked = true; const sh = Aud.shift; Aud.shift = function () { if (FS.inX) return; return sh.apply(this, arguments); }; X.whisperEvery = [1e9, 1e9]; X.blackEvery = [75, 150]; X.watchEvery = [1e6, 1e6]; }
   if (FS.wld !== world) fReset(); fUi(); fListen(); dt = Math.min(dt, .1);
-  if (P.stepAcc < FS.acc - .3 && P.grounded) fFollowStep(P.speed > 4.2 ? 1 : .6); FS.acc = P.stepAcc;      // you took a step (P.stepAcc resets on every footstep)
   // fear: 0..1
   const dark = !P.flash || (typeof Torch !== 'undefined' && Torch.k < .3), dread = (typeof ES !== 'undefined' && ES.dread) ? ES.dread / 100 : 0;
   const target = fC(FEAR.base[Math.min(2, LV)] + (dark ? .18 : 0) + dread * .35 + (P.hp < 50 ? .14 : 0) + Math.min(.15, (t - (FS.t0 || (FS.t0 = t))) / 900) + FS.tension * .3 + FS.sk.stage * .03 + (typeof XS !== 'undefined' && XS.black > 0 ? .25 : 0), 0, 1);
   FS.fear += (target - FS.fear) * (1 - Math.exp(-.5 * dt)); const f = FS.fear, on = fOn(), now = FS.c.currentTime;
-  if (FS.silT > 0) FS.silT -= dt; const q = FS.silT > 0 ? .08 : 1, m = FEAR.music;
+  const m = FEAR.music;
   // levels
   FS.out.gain.setTargetAtTime(FEAR.vol * (CFG.vol / 100) * 1.25, now, .1); const d = FS.d;
-  d.padG.gain.setTargetAtTime((.05 + .1 * f + FS.tension * .1) * m * q, now, .8);
-  d.subG.gain.setTargetAtTime((.03 + .07 * f) * m * q, now, 1);
-  d.padLP.frequency.setTargetAtTime(210 + 280 * f + FS.tension * 260, now, 1);
+  d.padG.gain.setTargetAtTime(.08 * m, now, 1); d.subG.gain.setTargetAtTime(.05 * m, now, 1);
   // heartbeat (louder and faster as fear and the Stalker's closeness rise)
   const maxS = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1), stam = P.exh ? 1 : fC((.35 - P.stam / maxS) / .35, 0, 1);   // 0 above 35% stamina, 1 when empty
-  const hb = Math.max((f - .5) * 1.6, FS.tension * .9, stam * .95); FS.hbT -= dt; if (hb > .05 && FS.hbT <= 0 && (FS.silT <= 0 || stam > 0)) { FS.hbT = 1.15 - .65 * hb; FS.pulse = 1; fHeart((.1 + .5 * hb) * m); }
+  const hb = Math.max((f - .5) * 1.6, FS.tension * .9, stam * .95); FS.hbT -= dt; if (hb > .05 && FS.hbT <= 0 && true) { FS.hbT = 1.15 - .65 * hb; FS.pulse = 1; fHeart((.1 + .5 * hb) * m); }
   FS.pulse = Math.max(0, FS.pulse - dt * 3);
   // vignette + flash
   FS.vig.style.opacity = on ? fC(.25 + .55 * f + FS.pulse * .12 * hb + FS.tension * .25, 0, 1).toFixed(3) : '0';
@@ -296,7 +213,7 @@ function updateFear(dt, t) {
   camera.rotation.z += Math.sin(t * .37) * .0045 * f;                         // the world never quite sits level
   if (!on) { for (const e of FS.eyes) { e.on = false; e.s.visible = false; } if (FS.fig) FS.fig.visible = false; return; }
   // the unseen
-  if (FS.stalk > 0) FS.stalk -= dt; fDirector(dt, f); fTrail(dt); fEyesTick(dt, f); fStalkerTick(dt);
+  if (FS.stalk > 0) FS.stalk -= dt; fDirector(dt, f); fEyesTick(dt, f); fStalkerTick(dt);
 }
 // no scary text on screen, ever: this silences extras.html's whispers and escape.html's "behind you" / "breathe" lines (toasts about items and the exit still show)
 xWhisper = function () { };
