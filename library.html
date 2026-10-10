@@ -15,8 +15,8 @@
 'use strict';
 // ---------- tuning ----------
 const LIB = {
-  W: 59, H: 43,            // map size in tiles, keep both odd: 59 x 43 is 2x the garden (41 x 31), same as the carnival
-  rooms: 14,               // reading rooms scattered between the aisles
+  W: 41, H: 31,            // map size in tiles, keep both odd: 41 x 31 is the same size as the garden
+  rooms: 8,                // reading rooms scattered between the aisles
   loops: .10,              // chance a wall between two aisles is knocked through (higher = fewer dead ends)
   maxDist: 40,             // nothing further than this is drawn: it is all fog anyway, and it keeps the frame rate up
   fog: .052, fogNight: .034, fogColor: 0x0b0806, hemi: .26,
