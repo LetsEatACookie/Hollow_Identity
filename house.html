@@ -434,12 +434,24 @@ function hUpdate(dt, t) {
   w.hemi = (HOUSE.hemi * (1 - .55 * bad) * d.lit + .02) * (HS.bl ? .3 : 1);
   if (typeof pool !== 'undefined') for (const p of pool) if (p.cand) p.l.color.setHex(p.cand.col);
   // something at the far end of the hall (it is gone when you look away or come closer)
-  if (V.figure) {
+  if (V.figure && !(HS.js && HS.js.st === 1)) {
     const gh = HS.gh || (HS.gh = { on: false, cd: 10, used: 0, t: 0 });
     const inA = P.z < D.hz1 + .3 && P.x < D.bx0 - 2, spot = inA ? [D.cxE - .1, CZ] : [D.cxE, ZS - 2.4];
     const dx = spot[0] - P.x, dz = spot[1] - P.z, dd = Math.hypot(dx, dz) || 1, cosA = (dx * -Math.sin(P.yaw) + dz * -Math.cos(P.yaw)) / dd;
     if (!gh.on) { gh.cd -= dt; if (gh.cd <= 0 && gh.used < (D.n >= 7 ? 3 : 2) && dd > 9 && cosA > .85) { const f = scareFigure(); f.position.set(spot[0], 0, spot[1]); f.rotation.y = Math.atan2(-dx, -dz); f.visible = true; gh.on = true; gh.t = 0; P.flickT = .25; Aud.soft(90, 140, .6, .05); } }
     else { gh.t += dt; const f = Scare.fig; if (dd < 5.5 || cosA < .3 || gh.t > 7) { f.visible = false; gh.on = false; gh.used++; gh.cd = 18 + Math.random() * 14; P.flickT = .2; Aud.burst(700, .2, .08, 1); } }
+  }
+  // the jumpscare, once, on the second-last (torch-only) pass: halfway down hall B, looking towards the door, something is suddenly right in front of you and rushes at you
+  if (D.n === HOUSE.loops - 1) {
+    const J = HS.js || (HS.js = { st: 0, t: 0 });
+    if (J.st === 0 && P.z > D.hz1 + 6 && P.z < ZS - 6 && -Math.cos(P.yaw) > .45) {
+      J.st = 1; J.t = 0; const f = scareFigure(); f.position.set(D.cxE, 0, Math.min(ZS - 2, P.z + 3.2)); f.rotation.y = Math.PI; f.rotation.x = 0; f.visible = true;
+      P.flickT = .4; Aud.stinger(1); scareFlash(true); Scare.shake = 1; if (HS.gh && HS.gh.on) HS.gh.on = false;
+    } else if (J.st === 1) {
+      J.t += dt; const f = Scare.fig, dx = P.x - f.position.x, dz = P.z - f.position.z, dd = Math.hypot(dx, dz) || 1;
+      f.rotation.y = Math.atan2(dx, dz); f.rotation.x = .25; const stp = Math.min(dd, 11 * dt); f.position.x += dx / dd * stp; f.position.z += dz / dd * stp;
+      if (dd < 1.1 || J.t > 1.2) { J.st = 2; f.visible = false; f.rotation.x = 0; Aud.stinger(.6); scareFlash(true); Scare.shake = 1; P.flickT = .8; Aud.burst(180, .3, .22, .8); }
+    }
   }
   // the camera: a little roll, a slow breathing of the field of view
   camera.rotation.z += Math.sin(t * .8) * .012 * bad + (HS.bl ? (Math.random() - .5) * .02 : 0);
@@ -448,7 +460,7 @@ function hUpdate(dt, t) {
 const KI_Z = (D) => D.hz1 + 6.2;
 
 // ---------- the loop ----------
-function hReset() { HS.n = 0; HS.busy = false; HS.active = true; HS.ev = {}; HS.bl = null; HS.gh = null; }
+function hReset() { HS.n = 0; HS.busy = false; HS.active = true; HS.ev = {}; HS.bl = null; HS.gh = null; HS.js = null; }
 function hSystems() {        // switch off everything that belongs to the other levels
   try { if (Mim.st !== 'idle') mimicEnd(); } catch (e) { } try { if (Scare.act) endScare(); } catch (e) { } try { rKill(); } catch (e) { }
   try { fReset(); } catch (e) { } try { escClear(); ES.wld = null; } catch (e) { }
@@ -485,7 +497,7 @@ async function hAdvance() {          // through the door at the end: black for a
   if (HS.busy) return; HS.busy = true;
   const f = hFade(); f.style.transition = 'none'; f.style.opacity = 1; void f.offsetWidth;
   Aud.burst(150, .35, .16, .8); Aud.tone(70, 38, .5, .12);
-  HS.n++; HS.ev = {}; HS.bl = null; HS.gh = null;
+  HS.n++; HS.ev = {}; HS.bl = null; HS.gh = null; HS.js = null;
   libTeardown(); world = houseMake(HS.n); hTone(world);
   P.x = 1.5; P.z = CZ; P.y = 0; P.vy = 0; P.yaw = -Math.PI / 2; P.pitch = 0;
   net.set({ x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0 });
