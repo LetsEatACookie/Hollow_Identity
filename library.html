@@ -322,7 +322,7 @@ function doorSingle(root, world, tx, ty, rx, rz, o) {      // one stand-alone do
   return d;
 }
 
-// ---- working doors: they swing open as someone walks up to them (away from that person) and shut again once everyone has left ----
+// ---- working doors: MANUAL. Look at a door and press E or left-click to open it; do it again to shut it. It stays however you leave it. ----
 const DOORM = { open: 1.65, speed: 2.5 }, _dobj = new THREE.Object3D(); _dobj.rotation.order = 'YXZ';
 function doorDyn(world, d) {
   (world.dyn = world.dyn || []).push({ cx: d.cx, cz: d.cz, th: d.th, hx: d.hx, hz: d.hz, len: DOOR.LW, base: d.base, sgn: d.hs < 0 ? -1 : 1, dir: 1, ang: 0, want: false, yaw: d.base, hl: d.hl, hh: d.hh });
@@ -332,27 +332,82 @@ function leafSet(h, yaw) {
   h[3] = yaw; if (!h.m) return;
   _dobj.position.set(h[0], h[1], h[2]); _dobj.rotation.set(0, yaw, 0); _dobj.updateMatrix(); h.m.setMatrixAt(h.i, _dobj.matrix); h.m.instanceMatrix.needsUpdate = true;
 }
+// ---- manual doors: aim at a door (within reach) and press E or left-click: it opens away from you; do it again to close it. Closed doors are solid. ----
+// Multiplayer: every door you toggle is published in your presence key "dl" (level;index,open,dir,time ...); everyone merges them by timestamp.
+const DL = { w: null, mine: new Map(), seen: new Map(), el: null, last: '', scanT: 0, at: 0, reach: 3.4, cone: .55 };
+function doorSide(d, x, z) { const dx = x - d.cx, dz = z - d.cz, cs = Math.cos(d.th), sn = Math.sin(d.th); return { lat: dx * cs - dz * sn, al: dx * sn + dz * cs }; }   // across the doorway / along it (+ = room side)
+function doorTarget() {                                // the door you are looking at, if any
+  const ds = world && world.dyn; if (!ds || P.down > 0 || P.freeze || paused) return null;
+  const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw); let best = null, bs = -1e9;
+  for (const d of ds) {
+    if (d.locked) continue;                            // locked doors answer to the key in escape.html
+    const dx = d.cx - P.x, dz = d.cz - P.z, dist = Math.hypot(dx, dz); if (dist > DL.reach) continue;
+    const dot = dist < .6 ? 1 : (dx * fx + dz * fz) / dist; if (dot < DL.cone) continue;
+    const sc = dot * 2 - dist * .3; if (sc > bs) { bs = sc; best = d; }
+  }
+  return best;
+}
+function doorSound(d, open) {
+  if (Math.hypot(P.x - d.cx, P.z - d.cz) > 10) return;
+  if (open) { Aud.tone(150, 92, .5, .035, 'sawtooth'); Aud.burst(650, .28, .09, .9); }
+}
+function doorPublish() {
+  try { const e = []; for (const [i, v] of DL.mine) e.push(i + ',' + v[0] + ',' + v[1] + ',' + v[2].toString(36)); net.set({ dl: LV + ';' + e.join(';') }); } catch (x) { }
+}
+function doorToggle(d, want, mine) {
+  if (!want && mine) {                                 // never shut a door on somebody standing in it
+    const who = [[P.x, P.z]]; for (const r of remotes.values()) who.push([r.x, r.z]);
+    if (who.some(([x, z]) => { const o = doorSide(d, x, z); return Math.abs(o.lat) < 1.15 && Math.abs(o.al) < 1.1; })) { toast('Something is in the way.'); return false; }
+  }
+  if (want && d.ang < .02) d.dir = doorSide(d, P.x, P.z).al > 0 ? -1 : 1;      // swing away from whoever opened it
+  d.want = want; d.ts = Date.now(); doorSound(d, want);
+  if (mine) { DL.mine.set(world.dyn.indexOf(d), [want ? 1 : 0, d.dir > 0 ? 1 : 0, d.ts]); doorPublish(); }
+  return true;
+}
+// called from the E key (after escape objects and items) and from a left-click: true when a door took the press
+function doorInteract() { const d = doorTarget(); if (!d) return false; doorToggle(d, !d.want, true); return true; }
+window.addEventListener('mousedown', (e) => {          // capture phase: a click on a door opens it instead of using the selected hotbar item
+  if (e.button !== 0 || typeof started === 'undefined' || !started || paused || !document.pointerLockElement) return;
+  if (doorInteract()) { e.stopImmediatePropagation(); e.preventDefault(); }
+}, true);
+setInterval(() => { if (DL.el && performance.now() - DL.at > 400) DL.el.style.opacity = 0; }, 300);     // hide the prompt when there are no doors in this level
+
 function updateDoors(dt) {
   const ds = world.dyn; if (!ds) return;
-  const who = [[P.x, P.z]]; for (const r of remotes.values()) who.push([r.x, r.z]);
+  DL.at = performance.now();
+  if (DL.w !== world) { DL.w = world; DL.mine.clear(); DL.seen.clear(); doorPublish(); }
+  // other players' doors (merged by timestamp)
+  DL.scanT -= dt;
+  if (DL.scanT <= 0 && net.r) {
+    DL.scanT = .25;
+    for (const p of net.r.peers()) {
+      if (p.isMe) continue; const s = p.presence && p.presence.dl; if (typeof s !== 'string' || DL.seen.get(p.peer) === s) continue;
+      DL.seen.set(p.peer, s); const parts = s.split(';'); if ((+parts[0] | 0) !== LV) continue;
+      for (let i = 1; i < parts.length; i++) {
+        const [id, st, dr, tt] = parts[i].split(','), d = ds[+id | 0], ts = parseInt(tt, 36); if (!d || !(ts > (d.ts || 0))) continue;
+        d.ts = ts; if (d.locked) continue; if (+st && d.ang < .02) d.dir = +dr ? 1 : -1; if (!!+st !== d.want) { d.want = !!+st; doorSound(d, d.want); }
+      }
+    }
+  }
+  // swing
   for (const d of ds) {
-    const cs = Math.cos(d.th), sn = Math.sin(d.th); let near = false, side = 0;
-    for (const [x, z] of who) {
-      const dx = x - d.cx, dz = z - d.cz, lat = dx * cs - dz * sn, al = dx * sn + dz * cs;      // across the doorway / along it (+ = room side)
-      if (Math.abs(lat) < (d.want ? 2.6 : 1.9) && Math.abs(al) < (d.want ? 3.8 : 2.6)) { near = true; side = al; break; }
-    }
-    if (d.locked) near = false;                                                                 // a locked door stays shut (escape.html)
-    if (near && !d.want && d.ang < .02) d.dir = side > 0 ? -1 : 1;                                // swing away from whoever opened it
-    if (near !== d.want) {
-      d.want = near;
-      if (Math.hypot(P.x - d.cx, P.z - d.cz) < 10) { if (near) { Aud.tone(150, 92, .5, .035, 'sawtooth'); Aud.burst(650, .28, .09, .9); } }
-    }
+    if (d.locked && d.want) d.want = false;
     const tgt = d.want ? DOORM.open : 0;
     if (d.ang === tgt) continue;
     const was = d.ang; d.ang += Math.max(-DOORM.speed * dt, Math.min(DOORM.speed * dt, tgt - d.ang));
     d.yaw = d.base + d.sgn * d.dir * d.ang; leafSet(d.hl, d.yaw); leafSet(d.hh, d.yaw);
     if (was > 0 && d.ang === 0 && Math.hypot(P.x - d.cx, P.z - d.cz) < 10) { Aud.burst(150, .18, .26, .8); Aud.tone(90, 55, .2, .07); }       // the latch
   }
+  // the prompt
+  if (!DL.el) {
+    const e = DL.el = document.createElement('div');
+    e.style.cssText = 'position:fixed;left:50%;bottom:27%;transform:translateX(-50%);z-index:20;pointer-events:none;opacity:0;transition:opacity .15s;padding:7px 16px;border-radius:8px;background:rgba(0,0,0,.5);color:#e8efe6;font:600 14px Inter,sans-serif;letter-spacing:.14em;text-transform:uppercase;white-space:nowrap';
+    e.addEventListener('touchstart', (ev) => { ev.preventDefault(); doorInteract(); }, { passive: false }); if (typeof isTouch !== 'undefined' && isTouch) e.style.pointerEvents = 'auto';
+    document.body.appendChild(e);
+  }
+  const tg = doorTarget();
+  if (tg) { const txt = ((typeof isTouch !== 'undefined' && isTouch) ? 'Tap' : '[E] or click') + ' \u2014 ' + (tg.want ? 'Close door' : 'Open door'); if (txt !== DL.last) { DL.el.textContent = txt; DL.last = txt; } }
+  DL.el.style.opacity = tg ? 1 : 0;
 }
 
 // the way out in the library: a door in the east wall of the exit hall, standing ajar with the light of the other side spilling through

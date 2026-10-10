@@ -1447,7 +1447,7 @@
     <div id="shakeUI" class="hide"><span id="shakeTxt"></span>
       <div class="bar"><i id="shakeBar"></i></div>
     </div>
-    <div id="hint">WASD move · Shift sprint · Space jump · F flashlight · Right mouse shake torch · E pick up · 1-5 hotbar (wheel to cycle, click or R to use) · Q / E / G perk keys · V mute mic · Esc menu</div>
+    <div id="hint">WASD move · Shift sprint · Space jump · F flashlight · Right mouse shake torch · E pick up · E or click on a door to open it · 1-5 hotbar (wheel to cycle, click or R to use) · Q / E / G perk keys · V mute mic · Esc menu</div>
   </div>
   <div id="pings"></div>
   <div id="pause" class="hide">
@@ -2238,7 +2238,7 @@
         if (paused) return;
         if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
         if (keys.has(e.code)) return; keys.add(e.code);
-        if (e.code === 'KeyF') actFlash(); else if (e.code === 'KeyQ') actNight(); else if (e.code === 'KeyE') { if (!escInteract() && !itemInteract()) actBeacon(); } else if (e.code === 'KeyG') actFlare();
+        if (e.code === 'KeyF') actFlash(); else if (e.code === 'KeyQ') actNight(); else if (e.code === 'KeyE') { if (!escInteract() && !itemInteract() && !doorInteract()) actBeacon(); } else if (e.code === 'KeyG') actFlare();
       });
       window.addEventListener('keyup', (e) => keys.delete(e.code));
       window.addEventListener('blur', () => keys.clear());
