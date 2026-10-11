@@ -393,8 +393,11 @@ function hFade() {
 }
 function hHud(show) {
   try {
-    const els = [ES.el, document.getElementById('escDrN') && document.getElementById('escDrN').parentElement, document.getElementById('escDrF') && document.getElementById('escDrF').parentElement && document.getElementById('escDrF').parentElement.parentElement];
-    for (const e of els) if (e) e.style.display = show ? '' : 'none';
+    // The player's bars (health, stamina, night eyes, flares, dread) must ALWAYS stay visible, also inside the house.
+    // The old version hid the whole bottom-left panel here (#bl is the grandparent of #escDrF). Now only the relic list is hidden in the house.
+    for (const id of ['escDrN', 'escDrF']) { const n = document.getElementById(id); for (let e = n, i = 0; e && i < 3 && e.id !== 'hud'; e = e.parentElement, i++) e.style.display = ''; }
+    const bl = document.getElementById('bl'); if (bl) bl.style.display = '';
+    if (ES.el) ES.el.style.display = show ? '' : 'none';
     for (const e of [ES.vig, ES.pulse, ES.prompt]) if (e && !show) e.style.opacity = 0;
   } catch (e) { }
 }
