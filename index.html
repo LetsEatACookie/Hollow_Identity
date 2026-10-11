@@ -2263,7 +2263,7 @@
       }
       window.addEventListener('keydown', (e) => {
         if (!started) return;
-        if (INTRO.on && e.code !== 'Escape') { if (!paused && (e.code === 'Space' || e.code === 'Enter')) { e.preventDefault(); introEnd(); } return; }
+        if ((INTRO.on || BED.on) && e.code !== 'Escape') { if (!paused && (e.code === 'Space' || e.code === 'Enter')) { e.preventDefault(); if (BED.on) bedEnd(); else introEnd(); } return; }
         if (e.code === 'Escape') { if (!P.escapedOverlay) { if (!paused) openPause(); else if (lockFailed && performance.now() - pauseT > 300) closePause(); } return; }
         if (paused) return;
         if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
@@ -2273,7 +2273,7 @@
       window.addEventListener('keyup', (e) => keys.delete(e.code));
       window.addEventListener('blur', () => keys.clear());
       window.addEventListener('mousemove', (e) => {
-        if (!started || paused || P.escapedOverlay || INTRO.on) return;
+        if (!started || paused || P.escapedOverlay || INTRO.on || BED.on) return;
         mX = e.clientX; mY = e.clientY; const k = .0022 * CFG.sens / 100;
         P.yaw -= e.movementX * k; P.pitch = clamp(P.pitch - e.movementY * k * (CFG.inv ? -1 : 1), -1.45, 1.45);
       });
@@ -2516,13 +2516,119 @@
         }
         if (t >= INTRO_END) introEnd();
       }
-      $('#inSkip').addEventListener('click', introEnd);
+
+      // ---- bedroom cutscene (garden level only, plays BEFORE the wake-up-on-the-floor cutscene): you wake up in your bed, look around, nothing there.
+      //      You close your eyes... and when you open them again something is standing in the room, watching you. Then the garden cutscene starts.
+      //      Optional voice: drop bed1.mp3 / bed2.mp3 / bed3.mp3 into /audio and they play with the matching subtitle (without the files it is subtitles only).
+      const BED = { on: false, t: 0, hb: 0, said: [], line: -1, lines: [], scene: null, built: false, lamp: null, moon: null, watcher: null, eyes: [], seen: false, shut: false };
+      const BED_END = 20, BED_B = Math.PI;
+      const BED_LID = [[0, 0], [1.6, 0], [2.4, .4], [2.9, .08], [3.6, .85], [4.3, 1], [12.0, 1], [12.9, 0], [14.2, 0], [14.7, 1], [18.0, 1], [18.22, 0]];
+      const BED_YAW = [[0, BED_B], [4.4, BED_B], [6.3, BED_B - 1.25], [8.0, BED_B - 1.25], [10.3, BED_B + 1.25], [11.8, BED_B + 1.25], [13.4, BED_B - .13]];
+      const BED_PITCH = [[0, 1.1], [3.6, 1.0], [5.2, .3], [6.3, .12], [12, .1], [13.4, .12], [18, .22]];
+      function bedBuild() {
+        if (BED.built) return; BED.built = true;
+        const sc = BED.scene = new THREE.Scene(); sc.background = new THREE.Color(0x03050a); sc.fog = new THREE.FogExp2(0x04060c, .11);
+        const mat = (c, e) => new THREE.MeshLambertMaterial({ color: c, emissive: e || 0x000000 });
+        const box = (w, h, d, x, y, z, m) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(x, y, z); sc.add(o); return o; };
+        const W = 2.3, D = 2.2, H = 2.6;
+        const wall = mat(0x2a3140), floor = mat(0x2b1d16), wood = mat(0x1d1511), cloth = mat(0x30464a), sheet = mat(0x8d97a3);
+        box(2 * W, .1, 2 * D, 0, -.05, 0, floor); box(2 * W, .1, 2 * D, 0, H + .05, 0, mat(0x20252f));
+        box(2 * W, H, .1, 0, H / 2, -D - .05, wall); box(2 * W, H, .1, 0, H / 2, D + .05, wall);
+        box(.1, H, 2 * D, -W - .05, H / 2, 0, wall); box(.1, H, 2 * D, W + .05, H / 2, 0, wall);
+        for (const sx of [-1, 1]) box(.06, .16, 2 * D, sx * (W - .02), .08, 0, wood);       // skirting
+        box(2 * W, .16, .06, 0, .08, D - .02, wood);
+        // rug
+        const rug = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, .02, 28), mat(0x3a2630)); rug.position.set(.4, .01, .5); sc.add(rug);
+        // bed (head against the back wall, you lie in it)
+        const bx = -.9; box(1.6, .3, 2.15, bx, .3, -D + 1.1, wood); box(1.5, .24, 2.05, bx, .55, -D + 1.1, sheet);
+        box(1.6, .95, .08, bx, .62, -D + .05, wood); box(1.6, .5, .08, bx, .4, -D + 2.2, wood);
+        box(1.54, .14, 1.35, bx, .69, -D + 1.55, cloth);
+        for (const px of [-.38, .38]) { const pl = new THREE.Mesh(new THREE.SphereGeometry(.28, 14, 10), sheet); pl.scale.set(1.2, .4, .8); pl.position.set(bx + px, .76, -D + .42); sc.add(pl); }
+        // nightstand + lamp (the only warm light)
+        box(.45, .55, .45, -1.98, .28, -D + .4, wood);
+        const shade = new THREE.Mesh(new THREE.CylinderGeometry(.1, .17, .22, 14, 1, true), new THREE.MeshBasicMaterial({ color: 0xffc27a, side: THREE.DoubleSide })); shade.position.set(-1.98, .72, -D + .4); sc.add(shade);
+        box(.04, .16, .04, -1.98, .62, -D + .4, mat(0x111111));
+        BED.lamp = new THREE.PointLight(0xffa850, 1.1, 5.5, 2); BED.lamp.position.set(-1.9, .78, -D + .55); sc.add(BED.lamp);
+        // window (right wall, cold moonlight) with a frame and the night outside
+        const wz = -.7, win = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.25), new THREE.MeshBasicMaterial({ color: 0x4a5f86 })); win.position.set(W - .005, 1.55, wz); win.rotation.y = -Math.PI / 2; sc.add(win);
+        box(.06, 1.35, .08, W - .03, 1.55, wz, wood); box(.06, .08, 1.1, W - .03, 1.55, wz, wood); box(.08, .08, 1.12, W - .03, 2.2, wz, wood); box(.08, .08, 1.12, W - .03, .9, wz, wood); box(.08, 1.35, .08, W - .03, 1.55, wz - .52, wood); box(.08, 1.35, .08, W - .03, 1.55, wz + .52, wood);
+        BED.moon = new THREE.PointLight(0x7d9cff, .9, 7, 2); BED.moon.position.set(W - .5, 1.7, wz); sc.add(BED.moon);
+        // door (far wall), wardrobe, picture
+        box(.95, 2.05, .06, .6, 1.03, D - .02, mat(0x241a14)); box(.06, .06, .12, .25, 1.0, D - .08, mat(0x9a8a60)); box(1.1, 2.15, .04, .6, 1.08, D - .04, wood);
+        box(.7, 2.05, 1.25, W - .4, 1.03, 1.2, mat(0x1b1410)); box(.02, 1.9, .02, W - .75, 1.03, 1.2, mat(0x0b0806)); box(.04, .12, .04, W - .77, 1.0, 1.1, mat(0x9a8a60)); box(.04, .12, .04, W - .77, 1.0, 1.3, mat(0x9a8a60));
+        box(.05, .55, .75, -W + .03, 1.65, .5, wood); box(.03, .45, .65, -W + .05, 1.65, .5, mat(0x1a2030));
+        sc.add(new THREE.AmbientLight(0x1b2236, .9));
+        // the watcher: tall, thin, too still, with two pale eyes. Hidden until you open your eyes the second time.
+        const w = BED.watcher = new THREE.Group(), black = new THREE.MeshBasicMaterial({ color: 0x010102 });
+        const torso = new THREE.Mesh(new THREE.CylinderGeometry(.14, .2, 1.1, 10), black); torso.position.y = 1.35; w.add(torso);
+        const legs = new THREE.Mesh(new THREE.CylinderGeometry(.1, .08, .9, 8), black); legs.position.y = .45; w.add(legs);
+        const neck = new THREE.Mesh(new THREE.CylinderGeometry(.05, .07, .35, 8), black); neck.position.y = 2.05; w.add(neck);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(.15, 14, 12), black); head.scale.set(.85, 1.35, .9); head.position.y = 2.28; head.rotation.z = .18; w.add(head);
+        for (const sx of [-1, 1]) {
+          const arm = new THREE.Mesh(new THREE.CylinderGeometry(.04, .03, 1.5, 6), black); arm.position.set(sx * .26, 1.3, 0); arm.rotation.z = sx * .08; w.add(arm);
+          const eye = new THREE.Mesh(new THREE.SphereGeometry(.026, 8, 6), new THREE.MeshBasicMaterial({ color: 0xfff1c4 })); eye.position.set(sx * .055 + .03, 2.3, .12); w.add(eye); BED.eyes.push(eye);
+          const g = document.createElement('canvas'); g.width = g.height = 64; const x = g.getContext('2d'), gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+          gr.addColorStop(0, 'rgba(255,241,196,.95)'); gr.addColorStop(.25, 'rgba(255,225,150,.35)'); gr.addColorStop(1, 'rgba(255,200,100,0)'); x.fillStyle = gr; x.fillRect(0, 0, 64, 64);
+          const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(g), blending: THREE.AdditiveBlending, depthWrite: false, fog: false })); sp.scale.set(.2, .2, 1); sp.position.copy(eye.position); w.add(sp);
+        }
+        w.position.set(-1.35, 0, 1.85); w.rotation.y = Math.atan2(bx + .4 - w.position.x, -D + 1.1 - w.position.z); w.visible = false; sc.add(w);
+      }
+      function bedStart() {
+        const B = BED; bedBuild();
+        B.on = true; B.t = 0; B.hb = .3; B.said = []; B.line = -1; B.seen = false; B.shut = false; B.watcher.visible = false; B.watcher.position.set(-1.35, 0, 1.85);
+        B.lines = [[3.0, 'Mm... what time is it...?', 'bed1', 2.4], [6.2, 'Just my room... nothing here.', 'bed2', 2.4], [9.1, 'Nothing at the window. Nothing at the door.', 'bed3', 2.6], [10.9, 'Go back to sleep...', null, 1.8]];
+        P.freeze = true; keys.clear(); joy.x = joy.y = 0; if (torchGroup) torchGroup.visible = false;
+        $('#inTxt').classList.remove('on'); $('#inTxt').textContent = ''; $('#intro').classList.remove('hide');
+        for (const n of ['bed1', 'bed2', 'bed3']) Voice.load(n);
+        $('#intro .lidT').style.height = $('#intro .lidB').style.height = '52%';
+        if (Aud.ctx) Aud.tone(48, 44, 9, .035, 'sine');
+      }
+      function bedEnd() {
+        const B = BED; if (!B.on) return; B.on = false; Voice.stop('i');
+        $('#inTxt').classList.remove('on'); B.watcher.visible = false;
+        introStart();                                    // second cutscene: you come to on the ground in the garden
+      }
+      function bedTick(dt) {
+        const B = BED; if (!B.on || paused) return; B.t += dt; const t = B.t;
+        const ss = (x) => x * x * (3 - 2 * x), c01 = (x) => clamp(x, 0, 1);
+        const kf = (a, x) => { if (x <= a[0][0]) return a[0][1]; for (let i = 1; i < a.length; i++) if (x <= a[i][0]) return lerp(a[i - 1][1], a[i][1], ss((x - a[i - 1][0]) / (a[i][0] - a[i - 1][0]))); return a[a.length - 1][1]; };
+        // eyelids
+        const open = kf(BED_LID, t), sh = 1 - open;
+        for (const el of [$('#intro .lidT'), $('#intro .lidB')]) { el.style.height = (sh * 52) + '%'; el.style.boxShadow = sh < .01 ? 'none' : '0 0 ' + (sh * 70) + 'px ' + (sh * 45) + 'px #000'; }
+        // camera: lying in bed, looking at the ceiling, then around the room
+        const calm = t < 14 ? 1 : .35;
+        camera.position.set(-.9 + Math.sin(t * .6) * .004, .98 + Math.sin(t * 1.5) * .008, -2.2 + .55);
+        camera.rotation.set(kf(BED_PITCH, t) + Math.sin(t * 1.1) * .01 * calm, kf(BED_YAW, t) + Math.sin(t * .7) * .02 * calm, Math.sin(t * .5) * .015);
+        // the watcher appears in the second you open your eyes, then creeps a little closer
+        if (t >= 14.2 && !B.seen) { B.seen = true; B.watcher.visible = true; B.hb = 0; if (Aud.ctx) { Aud.tone(46, 28, 3.2, .3, 'sawtooth'); Aud.tone(1900, 500, .9, .05); Aud.tone(120, 40, .5, .25, 'square'); } }
+        if (B.seen) {
+          const u = c01((t - 14.2) / 3.8), w = B.watcher; w.position.set(-1.35 + .55 * ss(u), 0, 1.85 - .7 * ss(u)); w.rotation.y = Math.atan2(-.9 - w.position.x, -2.2 + 1.1 - w.position.z); w.children[3].rotation.z = .18 + Math.sin(t * .6) * .05 + ss(c01((t - 16) / 1.5)) * .25;
+        }
+        // the lamp flickers, and dies when the thing is there
+        const lampBase = t < 14.2 ? 1.1 : t < 16.6 ? .5 : .12; BED.lamp.intensity = lampBase * (1 + (Math.random() - .5) * (t < 14.2 ? .05 : .5));
+        BED.moon.intensity = .9 * (1 - .35 * ss(c01((t - 14.2) / 1)));
+        // subtitles
+        const el = $('#inTxt');
+        for (let i = 0; i < B.lines.length; i++) {
+          const L = B.lines[i], s0 = L[0], v = L[2], len = ((v && Voice.dur(v)) || L[3]) + .35, on = t >= s0 && t < s0 + len;
+          if (t >= s0 && !B.said[i]) { B.said[i] = 1; if (v) Voice.play(v, 'i'); }
+          if (on && B.line !== i) { B.line = i; el.textContent = L[1]; el.classList.add('on'); }
+          else if (!on && B.line === i && t >= s0) { B.line = -1; el.classList.remove('on'); }
+        }
+        // sound: calm heartbeat that jumps when you see it, a thud when you slam your eyes shut
+        if (Aud.ctx) {
+          if (t < 18.1) { B.hb -= dt; if (B.hb <= 0) { B.hb = t < 14.2 ? 1.05 : lerp(.55, .36, c01((t - 14.2) / 3.8)); Aud.tone(62, 40, .13, t < 14.2 ? .12 : .3); setTimeout(() => Aud.tone(55, 36, .13, t < 14.2 ? .08 : .2), 150); } }
+          if (!B.shut && t > 18) { B.shut = true; Aud.tone(80, 28, .5, .4, 'square'); }
+        }
+        if (t >= BED_END) bedEnd();
+      }
+      $('#inSkip').addEventListener('click', () => { if (BED.on) bedEnd(); else introEnd(); });
       function enterGame() {
-        Aud.init(); Aud.resume(); Voice.preload(['intro1', 'intro2', 'intro3', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].concat(VOICE_SETS.key, VOICE_SETS.right, VOICE_SETS.wrong));
+        Aud.init(); Aud.resume(); Voice.preload(['intro1', 'intro2', 'intro3', 'bed1', 'bed2', 'bed3', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].concat(VOICE_SETS.key, VOICE_SETS.right, VOICE_SETS.wrong));
         started = true; startT = tNow; if (previewAv) previewAv.visible = false; camera.clearViewOffset(); torchGroup.visible = true;
         const sp0 = startSpot(); P.hp = HEALTH.max; P.hpT = 0; P.down = 0; P.dnK = 0;
         P.x = sp0.x; P.z = sp0.z; P.yaw = Math.PI / 4; P.pitch = 0; P.y = 0; P.stam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1); P.flares = has('flares') ? 5 : 0; P.energy = 100;
-        $('#reveal').classList.add('hide'); introStart();
+        $('#reveal').classList.add('hide'); if (LV === 0) bedStart(); else introStart();
         net.set({ x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, f: 1, e: 0 });
         tryLock();
       }
@@ -2892,6 +2998,7 @@
         if (ms - lastDraw < 1000 / FPS_CAP - 2) return; lastDraw = ms;
         const t = ms / 1000, raw = t - lastT || .016, dt = Math.min(.05, raw); lastT = t; tNow = t; uTime.value = t; perfTick(raw);
         if (!world || !previewAv && !started) return;
+        if (BED.on) { bedTick(dt); camera.updateMatrixWorld(true); renderer.render(BED.scene, camera); return; }
         if (started) { update(dt, t); if (INTRO.on) introTick(dt); } else previewCam(t);
         updatePool(dt, t); updateFlares(dt); updateRemotes(dt, t); updateMimic(dt, t); updateRoamers(dt, t); updateEscape(dt, t); vcFrame(); updatePings(dt); if (petals) updatePetals(dt);
         cullChunks(); renderer.render(scene, camera);
