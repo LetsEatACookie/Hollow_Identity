@@ -309,6 +309,28 @@
       }
     }
 
+    /* ---------- intro cutscene ---------- */
+    #intro { position: fixed; inset: 0; z-index: 40; pointer-events: none }
+    #intro .lid { position: absolute; left: 0; right: 0; background: #000; height: 52% }
+    #intro .lidT { top: 0 }
+    #intro .lidB { bottom: 0 }
+    #intro .lb { position: absolute; left: 0; right: 0; background: #000; height: 9vh }
+    #intro .lbT { top: 0 }
+    #intro .lbB { bottom: 0 }
+    #inTxt {
+      position: absolute; left: 0; right: 0; bottom: 17vh; text-align: center; padding: 0 24px;
+      font-family: Cinzel, serif; font-size: clamp(17px, 2.6vw, 30px); letter-spacing: .08em; line-height: 1.5;
+      color: #dff3e6; text-shadow: 0 0 18px rgba(120, 220, 160, .45), 0 2px 8px #000; white-space: pre-line;
+      opacity: 0; transition: opacity .9s
+    }
+    #inTxt.on { opacity: 1 }
+    #inSkip {
+      position: absolute; right: 22px; bottom: calc(9vh + 14px); pointer-events: auto; cursor: pointer;
+      background: rgba(8, 16, 12, .55); color: #cfe9d8; border: 1px solid var(--line); border-radius: 999px;
+      padding: 7px 16px; font: 600 12px Inter, system-ui, sans-serif; letter-spacing: .06em; opacity: .75
+    }
+    #inSkip:hover { opacity: 1 }
+
     /* ---------- reveal ---------- */
     #reveal,
     #lobby {
@@ -1389,6 +1411,13 @@
     </div>
   </div>
 
+  <div id="intro" class="hide">
+    <div class="lb lbT"></div><div class="lb lbB"></div>
+    <div class="lid lidT"></div><div class="lid lidB"></div>
+    <div id="inTxt"></div>
+    <button type="button" id="inSkip">Skip ▸ Space</button>
+  </div>
+
   <div id="lobby" class="hide">
     <div class="id">
       <h2 id="lbTitle">Your expedition is open</h2>
@@ -2234,6 +2263,7 @@
       }
       window.addEventListener('keydown', (e) => {
         if (!started) return;
+        if (INTRO.on && e.code !== 'Escape') { if (!paused && (e.code === 'Space' || e.code === 'Enter')) { e.preventDefault(); introEnd(); } return; }
         if (e.code === 'Escape') { if (!P.escapedOverlay) { if (!paused) openPause(); else if (lockFailed && performance.now() - pauseT > 300) closePause(); } return; }
         if (paused) return;
         if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
@@ -2243,7 +2273,7 @@
       window.addEventListener('keyup', (e) => keys.delete(e.code));
       window.addEventListener('blur', () => keys.clear());
       window.addEventListener('mousemove', (e) => {
-        if (!started || paused || P.escapedOverlay) return;
+        if (!started || paused || P.escapedOverlay || INTRO.on) return;
         mX = e.clientX; mY = e.clientY; const k = .0022 * CFG.sens / 100;
         P.yaw -= e.movementX * k; P.pitch = clamp(P.pitch - e.movementY * k * (CFG.inv ? -1 : 1), -1.45, 1.45);
       });
@@ -2420,12 +2450,55 @@
         const q = QUIRKS.find(x => x.id === me.q); $('#idQuirk').textContent = q.name + ' — ' + q.desc; $('#idQuirk').className = me.q === 'fearless' ? 'good' : 'bad';
         $('#enter').disabled = false;
       }
+      // ---- intro cutscene: you wake up on the floor, the room swims into focus, you stand up. Space / Enter / the button skips it.
+      const INTRO = { on: false, t: 0, line: -1, hb: 0, yaw: 0, ring: false, rise: false, lines: [] };
+      const INTRO_END = 9.4, INTRO_LID = [[0, 0], [1.1, 0], [2.1, .38], [2.6, .04], [3.5, .62], [4.4, .55], [4.8, .08], [5.8, 1]];
+      function introStart() {
+        const I = INTRO; I.on = true; I.t = 0; I.line = -1; I.hb = .2; I.yaw = P.yaw; I.ring = false; I.rise = false;
+        I.lines = [[.9, 'Your head is ringing.'], [3.5, me.name + '.\n' + me.role + '.\nThat is all you have left.'], [6.6, 'Beyond the door, the dark has grown wild.']];
+        P.freeze = true; keys.clear(); joy.x = joy.y = 0; if (torchGroup) torchGroup.visible = false;
+        $('#inTxt').classList.remove('on'); $('#inTxt').textContent = ''; $('#intro').classList.remove('hide');
+        introTick(0);
+      }
+      function introEnd() {
+        const I = INTRO; if (!I.on) return; I.on = false;
+        $('#intro').classList.add('hide'); P.freeze = false; P.yaw = I.yaw; P.pitch = 0; if (torchGroup) torchGroup.visible = true;
+        buildHud(); toast('Find the way out');
+      }
+      function introTick(dt) {
+        const I = INTRO; if (!I.on || paused) return; I.t += dt; const t = I.t;
+        const ss = (x) => x * x * (3 - 2 * x), c01 = (x) => clamp(x, 0, 1);
+        const kf = (a, x) => { if (x <= a[0][0]) return a[0][1]; for (let i = 1; i < a.length; i++) if (x <= a[i][0]) return lerp(a[i - 1][1], a[i][1], ss((x - a[i - 1][0]) / (a[i][0] - a[i - 1][0]))); return a[a.length - 1][1]; };
+        // eyelids
+        const open = kf(INTRO_LID, t), lt = $('#intro .lidT'), lb = $('#intro .lidB'), sh = (1 - open);
+        for (const el of [lt, lb]) { el.style.height = (sh * 52) + '%'; el.style.boxShadow = sh < .01 ? 'none' : '0 0 ' + (sh * 70) + 'px ' + (sh * 45) + 'px #000'; }
+        const bh = t > 8 ? lerp(9, 0, ss(c01((t - 8) / 1.4))) : 9; $('#intro .lbT').style.height = $('#intro .lbB').style.height = bh + 'vh';
+        // camera: lying on the floor, head turns, then pushes up to standing height
+        const u = ss(c01((t - 5.2) / 3.2)), turn = ss(c01((t - 1.5) / 7)), calm = 1 - u;
+        const y = P.y + lerp(.3, 1.62, u) + Math.sin(t * 1.9) * .012 * calm;
+        camera.position.set(P.x, y, P.z);
+        camera.rotation.set(lerp(.5, 0, u) + Math.sin(t * 1.3) * .015 * calm, I.yaw + lerp(.9, 0, turn) + Math.sin(t * .9) * .03 * calm, lerp(.95, 0, u) + Math.sin(t * .7) * .02 * calm);
+        // subtitles
+        for (let i = 0; i < I.lines.length; i++) {
+          const s0 = I.lines[i][0], on = t >= s0 && t < s0 + (i === 1 ? 2.8 : 2.4), el = $('#inTxt');
+          if (on && I.line !== i) { I.line = i; el.textContent = I.lines[i][1]; el.classList.add('on'); }
+          else if (!on && I.line === i && t >= s0) { I.line = -1; el.classList.remove('on'); }
+        }
+        // sound: ringing in your ears, a heartbeat that calms, a low swell as you stand
+        if (Aud.ctx) {
+          if (!I.ring) { I.ring = true; Aud.tone(3300, 3000, 3.4, .016); }
+          if (!I.rise && t > 5.2) { I.rise = true; Aud.tone(70, 130, 2.8, .05, 'triangle'); }
+          if (t < 8.4) { I.hb -= dt; if (I.hb <= 0) { I.hb = lerp(.75, 1.1, c01(t / 8)); Aud.tone(62, 40, .13, .2); setTimeout(() => Aud.tone(55, 36, .13, .13), 150); } }
+        }
+        if (t >= INTRO_END) introEnd();
+      }
+      $('#inSkip').addEventListener('click', introEnd);
       function enterGame() {
         Aud.init(); Aud.resume();
         started = true; startT = tNow; if (previewAv) previewAv.visible = false; camera.clearViewOffset(); torchGroup.visible = true;
         const sp0 = startSpot(); P.hp = HEALTH.max; P.hpT = 0; P.down = 0; P.dnK = 0;
         P.x = sp0.x; P.z = sp0.z; P.yaw = Math.PI / 4; P.pitch = 0; P.y = 0; P.stam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1); P.flares = has('flares') ? 5 : 0; P.energy = 100;
-        $('#reveal').classList.add('hide'); buildHud();
+        $('#reveal').classList.add('hide'); introStart();
         net.set({ x: +P.x.toFixed(2), y: 0, z: +P.z.toFixed(2), ry: +P.yaw.toFixed(2), rp: 0, f: 1, e: 0 });
         tryLock();
       }
@@ -2795,7 +2868,7 @@
         if (ms - lastDraw < 1000 / FPS_CAP - 2) return; lastDraw = ms;
         const t = ms / 1000, raw = t - lastT || .016, dt = Math.min(.05, raw); lastT = t; tNow = t; uTime.value = t; perfTick(raw);
         if (!world || !previewAv && !started) return;
-        if (started) update(dt, t); else previewCam(t);
+        if (started) { update(dt, t); if (INTRO.on) introTick(dt); } else previewCam(t);
         updatePool(dt, t); updateFlares(dt); updateRemotes(dt, t); updateMimic(dt, t); updateRoamers(dt, t); updateEscape(dt, t); vcFrame(); updatePings(dt); if (petals) updatePetals(dt);
         cullChunks(); renderer.render(scene, camera);
       }
