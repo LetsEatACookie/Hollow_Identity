@@ -2451,7 +2451,7 @@
         $('#enter').disabled = false;
       }
       // ---- voice lines (your own recordings, audio/*.mp3). Add a file name to VOICE_SETS and it gets picked at random.
-      const AUDIO_V = 3;   // bump this number whenever you replace an mp3 in /audio, so browsers (and GitHub Pages) don't keep serving the old cached file
+      const AUDIO_V = 4;   // bump this number whenever you replace an mp3 in /audio, so browsers (and GitHub Pages) don't keep serving the old cached file
       const VOICE_SETS = { key: [], right: ['right1', 'right2'], wrong: ['wrong1', 'wrong2'] };
       const Voice = {
         buf: {}, loading: {}, cur: [],
@@ -2520,7 +2520,7 @@
 
       // ---- bedroom cutscene (garden level only, plays BEFORE the wake-up-on-the-floor cutscene): you wake up in your bed, look around, nothing there.
       //      You close your eyes... and when you open them again something is standing in the room, watching you. Then the garden cutscene starts.
-      //      Optional voice: drop bed1.mp3 / bed2.mp3 / bed3.mp3 into /audio and they play with the matching subtitle (without the files it is subtitles only).
+      //      Optional voice: drop dream1.mp3 / dream2.mp3 / dream3.mp3 into /audio and they play with the matching subtitle (without the files it is subtitles only).
       const BED = { on: false, t: 0, hb: 0, said: [], line: -1, lines: [], scene: null, built: false, lamp: null, moon: null, watcher: null, eyes: [], seen: false, shut: false };
       const BED_END = 20, BED_B = Math.PI;
       const BED_LID = [[0, 0], [1.6, 0], [2.4, .4], [2.9, .08], [3.6, .85], [4.3, 1], [12.0, 1], [12.9, 0], [14.2, 0], [14.7, 1], [18.0, 1], [18.22, 0]];
@@ -2577,10 +2577,10 @@
       function bedStart() {
         const B = BED; bedBuild();
         B.on = true; B.t = 0; B.hb = .3; B.said = []; B.line = -1; B.seen = false; B.shut = false; B.watcher.visible = false; B.watcher.position.set(-1.35, 0, 1.85);
-        B.lines = [[2.6, 'Mm... what time is it...?', 'bed1', 2.4], [6.4, 'Just my room... nothing here.', 'bed2', 2.4], [9.4, 'Nothing at the window. Nothing at the door.', 'bed3', 2.6], [13.2, 'Go back to sleep...', null, .7]];
+        B.lines = [[2.6, 'Mm... what time is it...?', 'dream1', 2.4], [6.4, 'Just my room... nothing here.', 'dream2', 2.4], [9.4, 'Nothing at the window. Nothing at the door.', 'dream3', 2.6], [13.2, 'Go back to sleep...', null, .7]];
         P.freeze = true; keys.clear(); joy.x = joy.y = 0; if (torchGroup) torchGroup.visible = false;
         $('#inTxt').classList.remove('on'); $('#inTxt').textContent = ''; $('#intro').classList.remove('hide');
-        for (const n of ['bed1', 'bed2', 'bed3']) Voice.load(n);
+        for (const n of ['dream1', 'dream2', 'dream3']) Voice.load(n);
         $('#intro .lidT').style.height = $('#intro .lidB').style.height = '52%';
         if (Aud.ctx) Aud.tone(48, 44, 9, .035, 'sine');
       }
@@ -2612,7 +2612,7 @@
         const el = $('#inTxt');
         for (let i = 0; i < B.lines.length; i++) {
           const L = B.lines[i], s0 = L[0], v = L[2], len = ((v && Voice.dur(v)) || L[3]) + .35, on = t >= s0 && t < s0 + len;
-          if (t >= s0 && !B.said[i]) { B.said[i] = 1; if (v) Voice.play(v, 'i'); }
+          if (t >= s0 && !B.said[i]) { B.said[i] = 1; if (v) { Voice.play(v, 'i'); console.log('[bedroom voice]', v, 'length', Voice.dur(v).toFixed(2) + 's'); } }
           if (on && B.line !== i) { B.line = i; el.textContent = L[1]; el.classList.add('on'); }
           else if (!on && B.line === i && t >= s0) { B.line = -1; el.classList.remove('on'); }
         }
@@ -2625,7 +2625,7 @@
       }
       $('#inSkip').addEventListener('click', () => { if (BED.on) bedEnd(); else introEnd(); });
       function enterGame() {
-        Aud.init(); Aud.resume(); Voice.preload(['intro1', 'intro2', 'intro3', 'bed1', 'bed2', 'bed3', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].concat(VOICE_SETS.key, VOICE_SETS.right, VOICE_SETS.wrong));
+        Aud.init(); Aud.resume(); Voice.preload(['intro1', 'intro2', 'intro3', 'dream1', 'dream2', 'dream3', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].concat(VOICE_SETS.key, VOICE_SETS.right, VOICE_SETS.wrong));
         started = true; startT = tNow; if (previewAv) previewAv.visible = false; camera.clearViewOffset(); torchGroup.visible = true;
         const sp0 = startSpot(); P.hp = HEALTH.max; P.hpT = 0; P.down = 0; P.dnK = 0;
         P.x = sp0.x; P.z = sp0.z; P.yaw = Math.PI / 4; P.pitch = 0; P.y = 0; P.stam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1); P.flares = has('flares') ? 5 : 0; P.energy = 100;
