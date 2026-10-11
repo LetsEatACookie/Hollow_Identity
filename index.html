@@ -2450,51 +2450,75 @@
         const q = QUIRKS.find(x => x.id === me.q); $('#idQuirk').textContent = q.name + ' — ' + q.desc; $('#idQuirk').className = me.q === 'fearless' ? 'good' : 'bad';
         $('#enter').disabled = false;
       }
-      // ---- intro cutscene: you wake up on the floor, the room swims into focus, you stand up. Space / Enter / the button skips it.
-      const INTRO = { on: false, t: 0, line: -1, hb: 0, yaw: 0, ring: false, rise: false, lines: [] };
-      const INTRO_END = 9.4, INTRO_LID = [[0, 0], [1.1, 0], [2.1, .38], [2.6, .04], [3.5, .62], [4.4, .55], [4.8, .08], [5.8, 1]];
+      // ---- voice lines (your own recordings, audio/*.mp3). Add a file name to VOICE_SETS and it gets picked at random.
+      const VOICE_SETS = { key: [], right: ['right1', 'right2'], wrong: ['wrong1', 'wrong2'] };
+      const Voice = {
+        buf: {}, loading: {}, cur: [],
+        load(n) {
+          if (!Aud.ctx) return null; if (this.buf[n]) return Promise.resolve(); if (this.loading[n]) return this.loading[n];
+          return this.loading[n] = fetch('audio/' + n + '.mp3').then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); })
+            .then(a => new Promise((res, rej) => Aud.ctx.decodeAudioData(a, res, rej))).then(b => { this.buf[n] = b; }).catch(() => { });
+        },
+        preload(list) { for (const n of list) this.load(n); },
+        dur(n) { return this.buf[n] ? this.buf[n].duration : 0; },
+        play(n, group, vol) {
+          if (!Aud.ctx || !n) return; const b = this.buf[n]; if (!b) { this.load(n); return; }
+          if (group) this.stop(group);
+          const src = Aud.ctx.createBufferSource(), g = Aud.ctx.createGain(); src.buffer = b; g.gain.value = vol || 1; src.connect(g); g.connect(Aud.m);
+          const o = { src, group }; this.cur.push(o); src.onended = () => { const i = this.cur.indexOf(o); if (i >= 0) this.cur.splice(i, 1); }; src.start();
+        },
+        say(set, group) { const l = (VOICE_SETS[set] || []).filter(n => this.buf[n]); if (l.length) this.play(l[(Math.random() * l.length) | 0], group || 'r'); },
+        stop(group) { for (const o of this.cur.slice()) if (!group || o.group === group) { try { o.src.stop(); } catch (e) { } } }
+      };
+      // ---- intro cutscene: you wake up on the floor, the room swims into focus, you stand up (with your voice). Space / Enter / the button skips it.
+      const INTRO = { on: false, hold: false, t: 0, line: -1, hb: 0, yaw: 0, ring: false, rise: false, said: [], lines: [] };
+      const INTRO_END = 11, INTRO_LID = [[0, 0], [1.4, 0], [2.4, .38], [3.0, .04], [3.9, .62], [4.8, .55], [5.2, .08], [6.2, 1]];
       function introStart() {
-        const I = INTRO; I.on = true; I.t = 0; I.line = -1; I.hb = .2; I.yaw = P.yaw; I.ring = false; I.rise = false;
-        I.lines = [[.9, 'Your head is ringing.'], [3.5, me.name + '.\n' + me.role + '.\nThat is all you have left.'], [6.6, 'Beyond the door, the dark has grown wild.']];
+        const I = INTRO; I.on = true; I.hold = true; I.t = 0; I.line = -1; I.hb = .2; I.yaw = P.yaw; I.ring = false; I.rise = false; I.said = [];
+        I.lines = [[.6, 'Ugh... my head...', 'intro1'], [4.3, 'Where... where am I?', 'intro2'], [7.7, 'I don\u2019t remember how I got here...', 'intro3']];
         P.freeze = true; keys.clear(); joy.x = joy.y = 0; if (torchGroup) torchGroup.visible = false;
         $('#inTxt').classList.remove('on'); $('#inTxt').textContent = ''; $('#intro').classList.remove('hide');
+        const need = ['intro1', 'intro2', 'intro3'].map(n => Voice.load(n)).filter(Boolean);       // wait (max 2.5 s) for the recordings so the voice and the picture start together
+        Promise.race([Promise.all(need), new Promise(r => setTimeout(r, 2500))]).then(() => { I.hold = false; });
         introTick(0);
       }
       function introEnd() {
-        const I = INTRO; if (!I.on) return; I.on = false;
+        const I = INTRO; if (!I.on) return; I.on = false; Voice.stop('i');
         $('#intro').classList.add('hide'); P.freeze = false; P.yaw = I.yaw; P.pitch = 0; if (torchGroup) torchGroup.visible = true;
         buildHud(); toast('Find the way out');
       }
       function introTick(dt) {
-        const I = INTRO; if (!I.on || paused) return; I.t += dt; const t = I.t;
+        const I = INTRO; if (!I.on || paused) return; if (!I.hold) I.t += dt; const t = I.t;
         const ss = (x) => x * x * (3 - 2 * x), c01 = (x) => clamp(x, 0, 1);
         const kf = (a, x) => { if (x <= a[0][0]) return a[0][1]; for (let i = 1; i < a.length; i++) if (x <= a[i][0]) return lerp(a[i - 1][1], a[i][1], ss((x - a[i - 1][0]) / (a[i][0] - a[i - 1][0]))); return a[a.length - 1][1]; };
         // eyelids
         const open = kf(INTRO_LID, t), lt = $('#intro .lidT'), lb = $('#intro .lidB'), sh = (1 - open);
         for (const el of [lt, lb]) { el.style.height = (sh * 52) + '%'; el.style.boxShadow = sh < .01 ? 'none' : '0 0 ' + (sh * 70) + 'px ' + (sh * 45) + 'px #000'; }
-        const bh = t > 8 ? lerp(9, 0, ss(c01((t - 8) / 1.4))) : 9; $('#intro .lbT').style.height = $('#intro .lbB').style.height = bh + 'vh';
+        const bh = t > 9.6 ? lerp(9, 0, ss(c01((t - 9.6) / 1.4))) : 9; $('#intro .lbT').style.height = $('#intro .lbB').style.height = bh + 'vh';
         // camera: lying on the floor, head turns, then pushes up to standing height
-        const u = ss(c01((t - 5.2) / 3.2)), turn = ss(c01((t - 1.5) / 7)), calm = 1 - u;
+        const u = ss(c01((t - 6.8) / 3.4)), turn = ss(c01((t - 1.8) / 8.5)), calm = 1 - u;
         const y = P.y + lerp(.3, 1.62, u) + Math.sin(t * 1.9) * .012 * calm;
         camera.position.set(P.x, y, P.z);
         camera.rotation.set(lerp(.5, 0, u) + Math.sin(t * 1.3) * .015 * calm, I.yaw + lerp(.9, 0, turn) + Math.sin(t * .9) * .03 * calm, lerp(.95, 0, u) + Math.sin(t * .7) * .02 * calm);
-        // subtitles
+        // your voice + subtitles (the text stays up exactly as long as the clip plays)
+        const el = $('#inTxt');
         for (let i = 0; i < I.lines.length; i++) {
-          const s0 = I.lines[i][0], on = t >= s0 && t < s0 + (i === 1 ? 2.8 : 2.4), el = $('#inTxt');
+          const s0 = I.lines[i][0], v = I.lines[i][2], len = (Voice.dur(v) || 2.6) + .35, on = t >= s0 && t < s0 + len;
+          if (t >= s0 && !I.said[i]) { I.said[i] = 1; Voice.play(v, 'i'); }
           if (on && I.line !== i) { I.line = i; el.textContent = I.lines[i][1]; el.classList.add('on'); }
           else if (!on && I.line === i && t >= s0) { I.line = -1; el.classList.remove('on'); }
         }
         // sound: ringing in your ears, a heartbeat that calms, a low swell as you stand
         if (Aud.ctx) {
           if (!I.ring) { I.ring = true; Aud.tone(3300, 3000, 3.4, .016); }
-          if (!I.rise && t > 5.2) { I.rise = true; Aud.tone(70, 130, 2.8, .05, 'triangle'); }
-          if (t < 8.4) { I.hb -= dt; if (I.hb <= 0) { I.hb = lerp(.75, 1.1, c01(t / 8)); Aud.tone(62, 40, .13, .2); setTimeout(() => Aud.tone(55, 36, .13, .13), 150); } }
+          if (!I.rise && t > 6.8) { I.rise = true; Aud.tone(70, 130, 2.8, .05, 'triangle'); }
+          if (t < 9.6) { I.hb -= dt; if (I.hb <= 0) { I.hb = lerp(.75, 1.1, c01(t / 9)); Aud.tone(62, 40, .13, .2); setTimeout(() => Aud.tone(55, 36, .13, .13), 150); } }
         }
         if (t >= INTRO_END) introEnd();
       }
       $('#inSkip').addEventListener('click', introEnd);
       function enterGame() {
-        Aud.init(); Aud.resume();
+        Aud.init(); Aud.resume(); Voice.preload(['intro1', 'intro2', 'intro3', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].concat(VOICE_SETS.key, VOICE_SETS.right, VOICE_SETS.wrong));
         started = true; startT = tNow; if (previewAv) previewAv.visible = false; camera.clearViewOffset(); torchGroup.visible = true;
         const sp0 = startSpot(); P.hp = HEALTH.max; P.hpT = 0; P.down = 0; P.dnK = 0;
         P.x = sp0.x; P.z = sp0.z; P.yaw = Math.PI / 4; P.pitch = 0; P.y = 0; P.stam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1); P.flares = has('flares') ? 5 : 0; P.energy = 100;

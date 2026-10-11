@@ -249,7 +249,7 @@ function escTake(o, mine) {
   if (o.taken) return; o.taken = true; o.grp.visible = false; DYN.delete(o.light);
   if (mine) { ES.mine.add({ gem: 'r', note: 'r', fuse: 'r', key: 'k' }[o.kind] + o.id); escPublish(); }
   const pr = escProg(); escSealDraw();
-  if (o.kind === 'key') { if (mine) { ES.keys++; Aud.tone(700, 1400, .2, .12, 'triangle'); toast('🔑 Rusty Key — it fits a locked door somewhere. Look for the red glow.'); } }
+  if (o.kind === 'key') { if (mine) { ES.keys++; if (typeof Voice !== 'undefined') Voice.say('key'); Aud.tone(700, 1400, .2, .12, 'triangle'); toast('🔑 Rusty Key — it fits a locked door somewhere. Look for the red glow.'); } }
   else if (o.kind === 'gem') {
     const gm = ESC.gems[o.gi % ESC.gems.length]; Aud.tone(330, 990, .6, .12, 'triangle'); Aud.soft(200, 400, 1.6, .06);
     toast((mine ? gm.icon + ' ' + gm.name + ' gem recovered' : 'A teammate found the ' + gm.name + ' gem') + ' (' + pr.have + '/' + pr.need + ')' + (mine ? ' — ' + ESC.gemLore[o.gi % ESC.gemLore.length] : ''));
@@ -328,15 +328,15 @@ function kpDraw() {
 }
 function kpPress(k) {
   if (!ES.kp.on) return;
-  if (k === '⌫') ES.kp.buf = ES.kp.buf.slice(0, -1); else if (k === 'OK') kpSubmit(); else if (/^\d$/.test(k) && ES.kp.buf.length < ES.need) { ES.kp.buf += k; Aud.tone(1200 + ES.kp.buf.length * 90, 1200 + ES.kp.buf.length * 90, .05, .06, 'square'); }
+  if (k === '⌫') ES.kp.buf = ES.kp.buf.slice(0, -1); else if (k === 'OK') kpSubmit(); else if (/^\d$/.test(k) && ES.kp.buf.length < ES.need) { ES.kp.buf += k; if (typeof Voice !== 'undefined') Voice.play(k, 'd'); Aud.tone(1200 + ES.kp.buf.length * 90, 1200 + ES.kp.buf.length * 90, .05, .06, 'square'); }
   kpDraw();
 }
 function kpSubmit() {
   if (ES.kp.buf.length < ES.need) { toast('Four digits.'); return; }
   if (ES.kp.buf === ES.code) {
-    ES.solved = true; ES.mine.add('c0'); escPublish(); Aud.tone(600, 1200, .5, .1, 'triangle'); setTimeout(() => Aud.tone(900, 1800, .6, .1, 'triangle'), 250); toast('✔ CODE ACCEPTED'); kpClose(); escCheck();
+    ES.solved = true; ES.mine.add('c0'); escPublish(); Aud.tone(600, 1200, .5, .1, 'triangle'); setTimeout(() => Aud.tone(900, 1800, .6, .1, 'triangle'), 250); toast('✔ CODE ACCEPTED'); if (typeof Voice !== 'undefined') { Voice.stop('d'); Voice.say('right'); } kpClose(); escCheck();
   } else {
-    ES.kp.buf = ''; Aud.burst(200, .3, .3, .8); Aud.tone(140, 90, .5, .12, 'sawtooth'); toast('✖ WRONG. Somewhere in the dark, something heard that.');
+    ES.kp.buf = ''; if (typeof Voice !== 'undefined') Voice.say('wrong'); Aud.burst(200, .3, .3, .8); Aud.tone(140, 90, .5, .12, 'sawtooth'); toast('✖ WRONG. Somewhere in the dark, something heard that.');
     if (eOn()) { ES.dread = Math.min(100, ES.dread + 12); P.flickT = Math.max(P.flickT, 1.6); Scare.shake = Math.max(Scare.shake, .5); if (typeof roamAlert === 'function' && ES.station) roamAlert(ES.station.x, ES.station.z); }
     kpDraw();
   }
