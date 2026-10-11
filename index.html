@@ -857,6 +857,7 @@
       box-shadow: 0 0 6px rgba(0, 0, 0, .8)
     }
 
+    #hud #bl { display: block !important }   /* health / stamina / night eyes / dread are ALWAYS visible, whatever any level script does */
     #bl {
       position: absolute;
       left: calc(16px + var(--sal));
@@ -1537,9 +1538,10 @@
   <script>
     // Loads characters.html + maps.html + entity.html + roamers.html (and the rest) before the game starts. Needs http(s): GitHub Pages, Netlify, VS Code Live Server... (not a double-clicked file://)
     (function () {
+      var MOD_V = 2;   // bump this whenever you change one of the .html module files, so browsers / GitHub Pages don't keep the old cached copy
       try {
         ['characters.html', 'maps.html', 'entity.html', 'library.html', 'items.html', 'carnival.html', 'extras.html', 'furniture.html', 'escape.html', 'roamers.html', 'fear.html', 'house.html'].forEach(function (f) {
-          var x = new XMLHttpRequest(); x.open('GET', f, false); x.send();
+          var x = new XMLHttpRequest(); x.open('GET', f + '?v=' + MOD_V, false); x.send();
           if (x.status >= 400 || !x.responseText) throw new Error(f + ' not found');
           var el = new DOMParser().parseFromString(x.responseText, 'text/html').querySelector('script');
           var s = document.createElement('script'); s.textContent = el.textContent + '\n//# sourceURL=' + f; document.head.appendChild(s);
@@ -2408,6 +2410,16 @@
       }
       const CARD = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
       function hudTick() {
+        // safety net: no level script may hide the player's bars (health, stamina, night eyes, flares, dread). Re-show them every tick.
+        const hudEl = $('#hud'), blEl = $('#bl');
+        if (hudEl && hudEl.classList.contains('hide')) hudEl.classList.remove('hide');
+        if (hudEl) { hudEl.style.display = ''; hudEl.style.visibility = ''; hudEl.style.opacity = ''; }
+        if (blEl) {
+          if (hudEl && blEl.parentElement !== hudEl) hudEl.appendChild(blEl);
+          blEl.style.display = ''; blEl.style.visibility = ''; blEl.style.opacity = ''; blEl.classList.remove('hide');
+          const relics = (typeof ES !== 'undefined' && ES) ? ES.el : null;
+          for (const c of blEl.children) { if (c === relics || c.id === 'nrgWrap' || c.id === 'flareWrap') continue; c.style.display = ''; c.style.visibility = ''; c.style.opacity = ''; }
+        }
         const maxStam = 100 * (has('sprinter') ? 1.5 : 1) * (me.q === 'shortbreath' ? .6 : 1);
         $('#stamFill').style.width = (P.stam / maxStam * 100) + '%'; $('#stamFill').classList.toggle('low', P.exh);
         $('#hpFill').style.width = (P.hp / HEALTH.max * 100) + '%'; $('#hpFill').classList.toggle('low', P.hp < HEALTH.max * HEALTH.lowAt / 100); $('#hpN').textContent = Math.ceil(P.hp);
@@ -2451,6 +2463,7 @@
         $('#enter').disabled = false;
       }
       // ---- voice lines (your own recordings, audio/*.mp3). Add a file name to VOICE_SETS and it gets picked at random.
+      console.log('[Hollow Identity] build: hud-fix-3 (bedroom cutscene, dream voice files, HUD always visible)');
       const AUDIO_V = 4;   // bump this number whenever you replace an mp3 in /audio, so browsers (and GitHub Pages) don't keep serving the old cached file
       const VOICE_SETS = { key: [], right: ['right1', 'right2'], wrong: ['wrong1', 'wrong2'] };
       const Voice = {
