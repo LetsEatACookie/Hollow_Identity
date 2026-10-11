@@ -2576,7 +2576,7 @@
       function bedStart() {
         const B = BED; bedBuild();
         B.on = true; B.t = 0; B.hb = .3; B.said = []; B.line = -1; B.seen = false; B.shut = false; B.watcher.visible = false; B.watcher.position.set(-1.35, 0, 1.85);
-        B.lines = [[3.0, 'Mm... what time is it...?', 'bed1', 2.4], [6.2, 'Just my room... nothing here.', 'bed2', 2.4], [9.1, 'Nothing at the window. Nothing at the door.', 'bed3', 2.6], [10.9, 'Go back to sleep...', null, 1.8]];
+        B.lines = [[2.6, 'Mm... what time is it...?', 'bed1', 2.4], [6.4, 'Just my room... nothing here.', 'bed2', 2.4], [9.4, 'Nothing at the window. Nothing at the door.', 'bed3', 2.6], [13.2, 'Go back to sleep...', null, .7]];
         P.freeze = true; keys.clear(); joy.x = joy.y = 0; if (torchGroup) torchGroup.visible = false;
         $('#inTxt').classList.remove('on'); $('#inTxt').textContent = ''; $('#intro').classList.remove('hide');
         for (const n of ['bed1', 'bed2', 'bed3']) Voice.load(n);
