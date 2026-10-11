@@ -2451,12 +2451,13 @@
         $('#enter').disabled = false;
       }
       // ---- voice lines (your own recordings, audio/*.mp3). Add a file name to VOICE_SETS and it gets picked at random.
+      const AUDIO_V = 3;   // bump this number whenever you replace an mp3 in /audio, so browsers (and GitHub Pages) don't keep serving the old cached file
       const VOICE_SETS = { key: [], right: ['right1', 'right2'], wrong: ['wrong1', 'wrong2'] };
       const Voice = {
         buf: {}, loading: {}, cur: [],
         load(n) {
           if (!Aud.ctx) return null; if (this.buf[n]) return Promise.resolve(); if (this.loading[n]) return this.loading[n];
-          return this.loading[n] = fetch('audio/' + n + '.mp3').then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); })
+          return this.loading[n] = fetch('audio/' + n + '.mp3?v=' + AUDIO_V).then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); })
             .then(a => new Promise((res, rej) => Aud.ctx.decodeAudioData(a, res, rej))).then(b => { this.buf[n] = b; }).catch(() => { });
         },
         preload(list) { for (const n of list) this.load(n); },
